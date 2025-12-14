@@ -1,0 +1,1083 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>🚀 Colin & Salote — Kraken Auto Trading Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #0d1117;
+      color: #e6edf3;
+      text-align: center;
+      margin: 0;
+      padding: 20px;
+    }
+
+    h2 {
+      color: #58a6ff;
+      margin: 8px 0 10px 0;
+    }
+
+    .topBar {
+      width: 92%;
+      max-width: 1100px;
+      margin: 0 auto 12px auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .pill {
+      background: #161b22;
+      border: 2px solid #30363d;
+      padding: 10px 12px;
+      border-radius: 10px;
+      color: #e6edf3;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    a.linkBtn {
+      text-decoration: none;
+      background: #58a6ff;
+      color: #fff;
+      font-weight: bold;
+      border-radius: 10px;
+      padding: 10px 14px;
+      display: inline-block;
+    }
+
+    a.linkBtn:hover {
+      filter: brightness(1.05);
+    }
+
+    #alertBox {
+      background-color: #161b22;
+      border: 2px solid #30363d;
+      padding: 15px;
+      border-radius: 10px;
+      width: 92%;
+      max-width: 1100px;
+      margin: 0 auto 14px auto;
+      text-align: left;
+    }
+
+    #safePanel {
+      width: 92%;
+      max-width: 1100px;
+      margin: 12px auto;
+      padding: 12px;
+      background: #161b22;
+      border: 2px solid #30363d;
+      border-radius: 10px;
+      text-align: left;
+    }
+
+    #safePanel h3 {
+      margin: 0 0 10px 0;
+    }
+
+    .muted {
+      color: #8b949e;
+      font-size: 12px;
+    }
+
+    .safeTrade {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #0d1117;
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin: 8px 0;
+      cursor: pointer;
+      transition: 0.3s;
+      gap: 12px;
+    }
+
+    .safeTrade:hover {
+      background: #1f6feb33;
+    }
+
+    .safeBadge {
+      font-size: 12px;
+      font-weight: bold;
+      border-radius: 6px;
+      padding: 4px 8px;
+      background: #00c85333;
+      color: lightgreen;
+      white-space: nowrap;
+    }
+
+    .safeTag {
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid #30363d;
+      background: #0d1117;
+      color: #e6edf3;
+      white-space: nowrap;
+    }
+
+    table {
+      width: 92%;
+      max-width: 1100px;
+      margin: 16px auto;
+      border-collapse: collapse;
+    }
+
+    th,
+    td {
+      padding: 10px;
+      border: 1px solid #30363d;
+      cursor: pointer;
+    }
+
+    th {
+      background-color: #161b22;
+    }
+
+    tr:hover {
+      background-color: #1f6feb44;
+    }
+
+    .strongBuy {
+      color: lightgreen;
+      font-weight: bold;
+    }
+
+    .neutral {
+      color: #ffcc00;
+    }
+
+    .highlightRow {
+      box-shadow: 0 0 12px 2px rgba(0, 255, 0, 0.3);
+      animation: pulse 1.8s infinite alternate;
+    }
+
+    @keyframes pulse {
+      from {
+        box-shadow: 0 0 6px rgba(0, 255, 0, 0.1);
+      }
+
+      to {
+        box-shadow: 0 0 14px rgba(0, 255, 0, 0.5);
+      }
+    }
+
+    footer {
+      margin-top: 20px;
+      color: #8b949e;
+    }
+
+    .modal {
+      display: none;
+      position: fixed;
+      z-index: 10;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.6);
+      overflow-y: auto;
+    }
+
+    .modal-content {
+      background: #161b22;
+      margin: 3% auto;
+      padding: 18px;
+      border: 2px solid #30363d;
+      border-radius: 10px;
+      width: 92%;
+      max-width: 1100px;
+      color: #e6edf3;
+      text-align: left;
+      max-height: 92vh;
+      overflow-y: auto;
+    }
+
+    .close {
+      float: right;
+      color: #aaa;
+      font-size: 22px;
+      cursor: pointer;
+    }
+
+    .close:hover {
+      color: #fff;
+    }
+
+    canvas {
+      width: 100%;
+      height: 460px !important;
+      margin-top: 10px;
+    }
+
+
+    .profitBox {
+      border: 1px solid #30363d;
+      background-color: #0d1117;
+      border-radius: 10px;
+      padding: 12px;
+      margin-top: 12px;
+    }
+
+    .rowFlex {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .rowFlex>div {
+      flex: 1 1 260px;
+    }
+
+    input,
+    select {
+      border-radius: 6px;
+      border: 1px solid #30363d;
+      background: #0d1117;
+      color: #e6edf3;
+      padding: 6px 8px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    button.primaryBtn {
+      width: 100%;
+      border: none;
+      border-radius: 10px;
+      padding: 14px 16px;
+      font-weight: bold;
+      cursor: pointer;
+      background: #58a6ff;
+      color: #fff;
+      margin-top: 10px;
+      font-size: 16px;
+    }
+
+    button.primaryBtn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .strategyTag {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid #30363d;
+      background: #0d1117;
+      color: #e6edf3;
+      font-size: 12px;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+
+    .good {
+      color: lightgreen;
+    }
+
+    .warn {
+      color: #ffcc00;
+    }
+
+    .bad {
+      color: #ff5555;
+    }
+  </style>
+</head>
+
+<body>
+  <h2>🚀 Colin & Salote — Kraken Auto Trading Dashboard</h2>
+
+  <div class="topBar">
+    <div class="pill">
+      <span class="warn">Live trading</span>
+      <span class="muted" id="usdQuick">USD loading</span>
+      <span class="muted" id="modeBadge"></span>
+    </div>
+    <a class="linkBtn" href="/account.html">📒 Balance and Trades</a>
+  </div>
+
+  <div id="safePanel">
+    <h3>🛡️ Safest Trades Right Now</h3>
+    <div class="muted">This list only shows items your strategy would actually approve.</div>
+    <div id="safeTradesList">Loading...</div>
+  </div>
+
+  <div id="alertBox">Fetching market data...</div>
+
+  <table id="results">
+    <thead>
+      <tr>
+        <th>Coin</th>
+        <th>Price</th>
+        <th>Forecast Change</th>
+        <th>RSI</th>
+        <th>Score</th>
+        <th>Signal</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <div id="strategyModal" class="modal">
+    <div class="modal-content">
+      <span class="close" id="modalCloseBtn">&times;</span>
+      <h3 id="modalTitle"></h3>
+      <canvas id="projectionChart"></canvas>
+      <div id="modalContent"></div>
+    </div>
+  </div>
+
+  <footer>📊 Created by Colin Rika</footer>
+
+  <script>
+    const LIVE_MODE = true;
+    const AUTO_TRADING_ALWAYS_ON = false;
+
+    const MAX_SCAN_PAIRS = 60;
+    const OHLC_INTERVAL_MIN = 60;
+    const OHLC_CANDLES = 60;
+    const RSI_PERIOD = 14;
+
+    const blockedPairs = new Set(JSON.parse(localStorage.getItem("blockedPairs") || "[]"));
+
+    const alertBoxEl = document.getElementById("alertBox");
+    const safeListEl = document.getElementById("safeTradesList");
+    const tableBodyEl = document.querySelector("#results tbody");
+
+    const modalEl = document.getElementById("strategyModal");
+    const modalTitleEl = document.getElementById("modalTitle");
+    const modalContentEl = document.getElementById("modalContent");
+    const modalCloseBtnEl = document.getElementById("modalCloseBtn");
+    const projectionCanvasEl = document.getElementById("projectionChart");
+
+    let SIMULATOR = false;
+
+    function apiUrl(p) { return window.location.origin + p; }
+
+    async function getJson(url) {
+      const resp = await fetch(url);
+      const text = await resp.text();
+      let data = {};
+      try { data = JSON.parse(text); } catch { data = { raw: text }; }
+      if (!resp.ok) {
+        const err = new Error(data?.details || data?.error || ("Request failed " + resp.status));
+        err.payload = data;
+        throw err;
+      }
+      return data;
+    }
+
+    async function postJson(url, payload) {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const text = await resp.text();
+      let data = {};
+      try { data = JSON.parse(text); } catch { data = { raw: text }; }
+      if (!resp.ok) {
+        const err = new Error(data?.details || data?.error || ("Request failed " + resp.status));
+        err.payload = data;
+        throw err;
+      }
+      return data;
+    }
+
+    async function refreshMode() {
+      try {
+        const m = await getJson(apiUrl("/mode"));
+        SIMULATOR = m && m.simulator === true;
+        document.getElementById("modeBadge").textContent = SIMULATOR ? "Simulator ON" : "Simulator OFF";
+      } catch {
+        SIMULATOR = false;
+        document.getElementById("modeBadge").textContent = "";
+      }
+    }
+
+    function prettyPair(pair) { return String(pair).replace("X", "").replace("ZUSD", "/USD"); }
+    function blockPair(pair) {
+      blockedPairs.add(pair);
+      localStorage.setItem("blockedPairs", JSON.stringify(Array.from(blockedPairs)));
+    }
+
+    async function getPairInfo(pair) {
+      try {
+        return await getJson(apiUrl("/pair-info?pair=" + encodeURIComponent(pair)));
+      } catch {
+        return { ordermin: null, costmin: null };
+      }
+    }
+
+    function calcMinUsd(pairInfo, price) {
+      const ordermin = Number(pairInfo?.ordermin || 0);
+      const costmin = Number(pairInfo?.costmin || 0);
+      const byVol = (ordermin > 0) ? (ordermin * price) : 0;
+      const byCost = (costmin > 0) ? costmin : 0;
+      const minUsd = Math.max(byVol, byCost);
+      return (minUsd > 0) ? minUsd : 0;
+    }
+
+    function linearRegression(y, x) {
+      const n = y.length;
+      const sumx = x.reduce((a, b) => a + b, 0);
+      const sumy = y.reduce((a, b) => a + b, 0);
+      const sumxy = y.reduce((a, b, i) => a + b * x[i], 0);
+      const sumxx = x.reduce((a, b) => a + b * b, 0);
+      const denom = (n * sumxx - sumx * sumx);
+      const m = denom === 0 ? 0 : (n * sumxy - sumx * sumy) / denom;
+      const b = (sumy - m * sumx) / n;
+      return { m, b };
+    }
+
+    function calculateRSI_Wilder(closes, period) {
+      if (!Array.isArray(closes) || closes.length < period + 1) return 50;
+
+      let gains = 0;
+      let losses = 0;
+
+      for (let i = 1; i <= period; i++) {
+        const delta = closes[i] - closes[i - 1];
+        if (delta >= 0) gains += delta;
+        else losses -= delta;
+      }
+
+      let avgGain = gains / period;
+      let avgLoss = losses / period;
+
+      for (let i = period + 1; i < closes.length; i++) {
+        const delta = closes[i] - closes[i - 1];
+        const gain = delta > 0 ? delta : 0;
+        const loss = delta < 0 ? -delta : 0;
+        avgGain = (avgGain * (period - 1) + gain) / period;
+        avgLoss = (avgLoss * (period - 1) + loss) / period;
+      }
+
+      if (avgLoss === 0) return 100;
+      const rs = avgGain / avgLoss;
+      return 100 - (100 / (1 + rs));
+    }
+
+    function buildScore(predChange, trendSlope, rsi) {
+      const bonusMidRsi = (rsi >= 50 && rsi <= 65) ? 5 : 0;
+      const penaltyOverbought = (rsi > 70) ? 10 : 0;
+      return (predChange * 2) + (trendSlope * 10) + bonusMidRsi - penaltyOverbought;
+    }
+
+    function decideStrategyOrder(res, currentPrice) {
+      const rsi = Number(res.rsi);
+      const pred = Number(res.predChange);
+
+      if (rsi > 70 && pred < 0) {
+        return {
+          tag: "Overbought exit",
+          actionTitle: "Sell to protect gains",
+          details: "RSI is high and forecast is negative. This suggests momentum may fade. The strategy prefers reducing risk rather than holding through a pullback.",
+          side: "sell",
+          orderType: "limit",
+          price: currentPrice
+        };
+      }
+
+      if (rsi < 40 && pred > 1.5) {
+        return {
+          tag: "Oversold entry",
+          actionTitle: "Buy after weakness",
+          details: "RSI is low and forecast is positive. The strategy assumes a rebound is possible and enters with defined take profit and stop loss.",
+          side: "buy",
+          orderType: "limit",
+          price: currentPrice
+        };
+      }
+
+      if (rsi >= 45 && rsi <= 55 && pred > 3) {
+        const trigger = currentPrice * 1.01;
+        const limit = trigger * 1.002;
+        return {
+          tag: "Momentum breakout",
+          actionTitle: "Buy on breakout confirmation",
+          details: "RSI is near the middle and forecast is strong. The strategy waits for price to move slightly upward, then buys using a stop limit style entry.",
+          side: "buy",
+          orderType: "stop-loss-limit",
+          price: trigger,
+          price2: limit
+        };
+      }
+
+      return null;
+    }
+
+    function openModal() { modalEl.style.display = "block"; }
+    function closeModal() { modalEl.style.display = "none"; }
+    modalCloseBtnEl.addEventListener("click", closeModal);
+    window.addEventListener("click", (e) => { if (e.target === modalEl) closeModal(); });
+
+    async function refreshUsdQuick() {
+      try {
+        const d = await getJson(apiUrl("/balance"));
+        const usd = Number(d.balance?.ZUSD || 0);
+        document.getElementById("usdQuick").textContent = "USD " + usd.toFixed(4) + " updated " + new Date().toLocaleTimeString();
+      } catch {
+        document.getElementById("usdQuick").textContent = "USD unavailable";
+      }
+    }
+
+    async function getAllUsdPairs() {
+      const r = await fetch("https://api.kraken.com/0/public/AssetPairs");
+      const j = await r.json();
+      const result = j.result || {};
+      const pairs = [];
+
+      for (const key of Object.keys(result)) {
+        const info = result[key];
+        const wsname = info?.wsname || "";
+        if (!wsname.endsWith("/USD")) continue;
+        if (String(key).includes(".")) continue;
+        pairs.push(key);
+      }
+      return pairs;
+    }
+
+    async function fetchTickerBatch(pairsChunk) {
+      const url = "https://api.kraken.com/0/public/Ticker?pair=" + encodeURIComponent(pairsChunk.join(","));
+      const r = await fetch(url);
+      const j = await r.json();
+      return j.result || {};
+    }
+
+    async function getTopPairsByVolumeUsd(allPairs, topN) {
+      const pairs = allPairs.slice();
+      const batchSize = 20;
+      const scores = [];
+
+      for (let i = 0; i < pairs.length; i += batchSize) {
+        const chunk = pairs.slice(i, i + batchSize);
+        let tick = {};
+        try { tick = await fetchTickerBatch(chunk); } catch { tick = {}; }
+
+        for (const pairKey of chunk) {
+          const t = tick[pairKey];
+          if (!t) continue;
+
+          const last = Number(t.c && t.c[0]) || 0;
+          const vol24 = Number(t.v && t.v[1]) || 0;
+          const volUsd = last * vol24;
+
+          if (volUsd > 0) scores.push({ pair: pairKey, volUsd });
+        }
+      }
+
+      scores.sort((a, b) => b.volUsd - a.volUsd);
+      return scores.slice(0, topN).map(x => x.pair);
+    }
+
+    async function fetchOHLC(pair) {
+      const r = await fetch("https://api.kraken.com/0/public/OHLC?pair=" + encodeURIComponent(pair) + "&interval=" + OHLC_INTERVAL_MIN);
+      const j = await r.json();
+      const k = Object.keys(j.result || {}).find(x => x !== "last");
+      if (!k || !Array.isArray(j.result[k])) return [];
+
+      return j.result[k].slice(-OHLC_CANDLES).map(x => ({
+        time: new Date(x[0] * 1000).toLocaleTimeString([], { hour: "numeric" }),
+        close: Number(x[4])
+      }));
+    }
+
+    function buildModalChart(res) {
+      const src = (res.chartData && res.chartData.length) ? res.chartData : res.data;
+      const prices = src.map(d => d.close);
+      const times = src.map(d => d.time);
+
+      const x = prices.map((_, i) => i + 1);
+      const lrP = linearRegression(prices, x);
+      const forecast = Array.from({ length: 5 }, (_, i) => lrP.m * (x.length + i + 1) + lrP.b);
+
+      const rsiHist = [];
+      for (let i = 0; i < prices.length; i++) rsiHist.push(calculateRSI_Wilder(prices.slice(0, i + 1), RSI_PERIOD));
+
+      const rsiX = rsiHist.map((_, i) => i + 1);
+      const lrR = linearRegression(rsiHist, rsiX);
+      const rsiForecast = Array.from({ length: 5 }, (_, i) => lrR.m * (rsiHist.length + i + 1) + lrR.b);
+
+      const entry = res.last;
+      const tp = entry * 1.05;
+      const sl = entry * 0.93;
+
+      const labels = times.concat(["+1h", "+2h", "+3h", "+4h", "+5h"]);
+      const forecastSeries = Array(prices.length).fill(null).concat(forecast);
+      const rsiHistSeries = rsiHist.concat(Array(5).fill(null));
+      const rsiForecastSeries = Array(prices.length).fill(null).concat(rsiForecast);
+
+      if (window.projChart) window.projChart.destroy();
+
+      window.projChart = new Chart(projectionCanvasEl, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [
+            { label: "Price", data: prices.concat(Array(5).fill(null)), borderColor: "#4da3ff", borderWidth: 4, tension: 0.35, pointRadius: 0, yAxisID: "y" },
+            { label: "Forecast", data: forecastSeries, borderColor: "rgba(77,163,255,0.70)", borderWidth: 3, borderDash: [8, 7], tension: 0.35, pointRadius: 0, yAxisID: "y" },
+
+            { label: "RSI", data: rsiHistSeries, borderColor: "rgba(0,255,153,0.95)", borderWidth: 4, tension: 0.25, pointRadius: 0, yAxisID: "y1" },
+            { label: "RSI Forecast", data: rsiForecastSeries, borderColor: "rgba(0,255,153,0.55)", borderWidth: 3, borderDash: [6, 8], tension: 0.25, pointRadius: 0, yAxisID: "y1" },
+
+            { label: "Take Profit", data: Array(labels.length).fill(tp), borderColor: "rgba(0,255,0,0.60)", borderWidth: 2, borderDash: [12, 9], pointRadius: 0, yAxisID: "y" },
+            { label: "Stop Loss", data: Array(labels.length).fill(sl), borderColor: "rgba(255,80,80,0.70)", borderWidth: 2, borderDash: [12, 9], pointRadius: 0, yAxisID: "y" }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          devicePixelRatio: 2,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: {
+              position: "bottom",
+              labels: {
+                color: "#ffffff",
+                padding: 18,
+                boxWidth: 18,
+                font: { size: 16, weight: "bold" },
+                usePointStyle: true,
+                pointStyle: "line"
+              }
+            },
+            tooltip: {
+              enabled: true,
+              backgroundColor: "rgba(0,0,0,0.92)",
+              titleColor: "#fff",
+              bodyColor: "#fff",
+              borderColor: "rgba(255,255,255,0.18)",
+              borderWidth: 1,
+              titleFont: { size: 15, weight: "bold" },
+              bodyFont: { size: 14 },
+              padding: 12
+            }
+          },
+          scales: {
+            x: {
+              ticks: {
+                color: "#ffffff",
+                font: { size: 14, weight: "bold" },
+                maxRotation: 0,
+                autoSkip: false,
+                callback: function (value, index) {
+                  const step = Math.ceil(labels.length / 7);
+                  return (index % step === 0) ? labels[index] : "";
+                }
+              },
+              grid: { color: "rgba(255,255,255,0.08)" }
+            },
+            y: {
+              title: { display: true, text: "Price", color: "#4da3ff", font: { size: 16, weight: "bold" } },
+              ticks: {
+                color: "#4da3ff",
+                font: { size: 13, weight: "bold" },
+                callback: function (v) { return Number(v).toFixed(6); }
+              },
+              grid: { color: "rgba(77,163,255,0.10)" }
+            },
+            y1: {
+              position: "right",
+              min: 20,
+              max: 80,
+              title: { display: true, text: "RSI", color: "#00ff99", font: { size: 16, weight: "bold" } },
+              ticks: { color: "#00ff99", stepSize: 10, font: { size: 13, weight: "bold" } },
+              grid: { drawOnChartArea: false }
+            }
+          }
+        }
+      });
+
+
+      return { entry, tp, sl };
+    }
+
+    async function computeEstimates(entryPrice, tp, sl) {
+      const bal = await getJson(apiUrl("/balance"));
+      const usd = Number(bal.balance?.ZUSD || 0);
+
+      const amtEl = document.getElementById("tradeAmount");
+      const pctEl = document.getElementById("investSelect");
+
+      const amt = Number(amtEl.value || 0);
+      const pct = Number(pctEl.value || 0);
+
+      const invest = (amt > 0) ? amt : (usd * (pct / 100));
+      const qty = invest > 0 ? (invest / entryPrice) : 0;
+
+      const estProfit = (tp - entryPrice) * qty;
+      const estLoss = (entryPrice - sl) * qty;
+
+      return { usd, invest, qty, estProfit, estLoss };
+    }
+
+    async function placeOrder(pair, side, price, opts, isAuto) {
+      const tp = Number(document.getElementById("tpInput")?.value || 0);
+      const sl = Number(document.getElementById("slInput")?.value || 0);
+
+      const bal = await getJson(apiUrl("/balance"));
+      const usd = Number(bal.balance?.ZUSD || 0);
+
+      const amt = Number(document.getElementById("tradeAmount")?.value || 0);
+      const pct = Number(document.getElementById("investSelect")?.value || 0);
+      const invest = (amt > 0) ? amt : (usd * (pct / 100));
+
+      const payload = {
+        pair,
+        side,
+        orderType: opts.orderType || "limit",
+        price,
+        price2: (opts.price2 === undefined ? null : opts.price2),
+        takeProfit: tp,
+        stopLoss: sl,
+        investUsd: invest,
+        isAuto: isAuto === true
+      };
+
+      try {
+        return await postJson(apiUrl("/trade"), payload);
+      } catch (e) {
+        const msg = String(e.message || "");
+        if (msg.includes("Invalid permissions") || msg.includes("trading restricted")) blockPair(pair);
+        throw e;
+      }
+    }
+
+    async function showStrategyModal(res) {
+      const chartBuilt = buildModalChart(res);
+      const rec = decideStrategyOrder(res, chartBuilt.entry);
+
+      modalTitleEl.textContent = prettyPair(res.pair) + " " + res.signal;
+
+      const recLine = rec
+        ? ("<span class='good' style='font-weight:bold; font-size:18px;'>" + rec.actionTitle + "</span><span class='strategyTag'>" + rec.tag + "</span>")
+        : ("<span class='warn' style='font-weight:bold; font-size:18px;'>No trade right now</span>");
+
+      const recDetails = rec
+        ? ("<div class='muted' style='margin-top:6px;'>" + rec.details + "</div>")
+        : ("<div class='muted' style='margin-top:6px;'>Your rules do not see a safe entry. No trade is a valid outcome.</div>");
+
+      modalContentEl.innerHTML =
+        "<div class='profitBox'>" +
+        "<div class='rowFlex'>" +
+        "<div>" +
+        "<div class='muted'>Current price</div><div class='good' style='font-size:18px; font-weight:bold;'>" + chartBuilt.entry.toFixed(6) + "</div>" +
+        "<div class='muted' style='margin-top:8px;'>RSI</div><div class='warn' style='font-size:16px; font-weight:bold;'>" + Number(res.rsi).toFixed(1) + "</div>" +
+        "<div class='muted' style='margin-top:8px;'>Forecast change</div><div class='warn' style='font-size:16px; font-weight:bold;'>" + Number(res.predChange).toFixed(2) + " percent</div>" +
+        "</div>" +
+        "<div>" +
+        "<div class='muted'>Decision</div>" +
+        "<div style='margin-top:2px;'>" + recLine + "</div>" +
+        recDetails +
+        "</div>" +
+        "</div>" +
+        "</div>" +
+        "<div class='profitBox'>" +
+        "<div class='rowFlex'>" +
+        "<div>" +
+        "<div class='muted'>Take profit</div><input id='tpInput' type='number' value='" + chartBuilt.tp.toFixed(6) + "'>" +
+        "<div class='muted' style='margin-top:10px;'>Stop loss</div><input id='slInput' type='number' value='" + chartBuilt.sl.toFixed(6) + "'>" +
+        "<div class='muted' style='margin-top:10px;'>Trade amount USD</div><input id='tradeAmount' type='number' value='5'>" +
+        "<div class='muted' style='margin-top:10px;'>Or percent of USD</div>" +
+        "<select id='investSelect'>" +
+        "<option value='10'>10</option>" +
+        "<option value='25'>25</option>" +
+        "<option value='50'>50</option>" +
+        "<option value='100'>100</option>" +
+        "</select>" +
+        "</div>" +
+        "<div>" +
+        "<div class='muted'>Strategy order preview</div>" +
+        "<div id='orderPreviewBox' class='profitBox'></div>" +
+
+        "<div class='muted' style='margin-top:10px;'>Balance and profit estimate</div>" +
+        "<div id='estimateBox' class='profitBox'></div>" +
+
+        "<button id='btnApprove' class='primaryBtn' " + (rec ? "" : "disabled") + ">✅ Approve Strategy</button>" +
+        "<div class='muted' style='margin-top:8px;'>Live trades may place exits only after entry fills.</div>" +
+        "</div>" +
+        "</div>" +
+        "</div>";
+
+      openModal();
+
+      const estimateBox = document.getElementById("estimateBox");
+      const orderPreviewBox = document.getElementById("orderPreviewBox");
+
+      const approveBtn = document.getElementById("btnApprove");
+
+      const pairInfo = await getPairInfo(res.pair);
+
+      async function refreshEst() {
+        try {
+          const entryPrice = chartBuilt.entry;
+          const tp = Number(document.getElementById("tpInput").value);
+          const sl = Number(document.getElementById("slInput").value);
+
+          const est = await computeEstimates(entryPrice, tp, sl);
+
+          if (orderPreviewBox) {
+            const amt = Number(document.getElementById("tradeAmount").value || 0);
+            const pct = Number(document.getElementById("investSelect").value || 0);
+            const modeTxt = (amt > 0) ? "Fixed USD" : ("Percent of USD " + pct.toFixed(0) + " percent");
+
+            const sideTxt = rec ? String(rec.side).toUpperCase() : "N A";
+            const typeTxt = rec ? String(rec.orderType) : "N A";
+            const priceTxt = rec ? Number(rec.price).toFixed(6) : "0";
+            const price2Txt = (rec && rec.price2 !== undefined && rec.price2 !== null) ? Number(rec.price2).toFixed(6) : "";
+
+            orderPreviewBox.innerHTML =
+              "<div class='muted'>Mode</div><div style='font-weight:bold;'>" + modeTxt + "</div>" +
+              "<div class='muted' style='margin-top:8px;'>Side and type</div><div style='font-weight:bold;'>" + sideTxt + " " + typeTxt + "</div>" +
+              "<div class='muted' style='margin-top:8px;'>Invest amount</div><div class='warn' style='font-weight:bold; font-size:16px;'>" + est.invest.toFixed(2) + " USD</div>" +
+              "<div class='muted' style='margin-top:8px;'>Estimated quantity</div><div class='muted' style='font-weight:bold;'>" + est.qty.toFixed(6) + "</div>" +
+              "<div class='muted' style='margin-top:8px;'>Entry trigger</div><div class='good' style='font-weight:bold;'>" + priceTxt + "</div>" +
+              (price2Txt ? "<div class='muted' style='margin-top:8px;'>Entry limit</div><div class='good' style='font-weight:bold;'>" + price2Txt + "</div>" : "");
+          }
+
+
+          const minUsd = calcMinUsd(pairInfo, entryPrice);
+          const tooSmall = (minUsd > 0 && est.invest > 0 && est.invest < minUsd);
+          const overBalance = (est.invest > est.usd);
+
+          estimateBox.innerHTML =
+            "<div class='muted'>USD balance</div><div class='good' style='font-weight:bold; font-size:16px;'>" + est.usd.toFixed(4) + "</div>" +
+            "<div class='muted' style='margin-top:8px;'>Invest amount</div><div class='" + (overBalance ? "bad" : (tooSmall ? "bad" : "warn")) + "' style='font-weight:bold; font-size:16px;'>" + est.invest.toFixed(2) + "</div>" +
+            (minUsd > 0
+              ? "<div class='muted' style='margin-top:8px;'>Minimum for this pair</div><div class='" + (tooSmall ? "bad" : "muted") + "' style='font-weight:bold; font-size:14px;'>" + minUsd.toFixed(2) + " USD</div>"
+              : "") +
+            "<div class='muted' style='margin-top:8px;'>Estimated quantity</div><div class='muted' style='font-weight:bold; font-size:14px;'>" + est.qty.toFixed(6) + "</div>" +
+            "<div class='muted' style='margin-top:8px;'>Estimated profit at TP</div><div class='good' style='font-weight:bold; font-size:16px;'>" + est.estProfit.toFixed(4) + " USD</div>" +
+            "<div class='muted' style='margin-top:8px;'>Estimated loss at SL</div><div class='bad' style='font-weight:bold; font-size:16px;'>" + est.estLoss.toFixed(4) + " USD</div>" +
+            "<div class='muted' style='margin-top:6px;'>Estimates ignore fees and slippage.</div>" +
+            (tooSmall ? "<div class='bad' style='margin-top:10px; font-weight:bold;'>Trade amount is below Kraken minimum. Increase it to at least " + minUsd.toFixed(2) + " USD.</div>" : "");
+
+          if (approveBtn) {
+            approveBtn.disabled = (!rec) || tooSmall || (est.invest <= 0) || overBalance;
+          }
+        } catch {
+          estimateBox.innerHTML = "<div class='bad'>Unable to load estimate</div>";
+          if (approveBtn) approveBtn.disabled = true;
+        }
+      }
+
+      document.getElementById("tpInput").addEventListener("input", refreshEst);
+      document.getElementById("slInput").addEventListener("input", refreshEst);
+      document.getElementById("tradeAmount").addEventListener("input", refreshEst);
+      document.getElementById("investSelect").addEventListener("change", refreshEst);
+
+      await refreshEst();
+
+      if (approveBtn) {
+        approveBtn.addEventListener("click", async () => {
+          if (!rec) return;
+
+          approveBtn.disabled = true;
+          approveBtn.textContent = "Sending order...";
+
+          try {
+            const bal = await getJson(apiUrl("/balance"));
+            const usd = Number(bal.balance?.ZUSD || 0);
+            const amt = Number(document.getElementById("tradeAmount").value || 0);
+            const pct = Number(document.getElementById("investSelect").value || 0);
+            const invest = (amt > 0) ? amt : (usd * (pct / 100));
+
+            const minUsd = calcMinUsd(pairInfo, chartBuilt.entry);
+            if (minUsd > 0 && invest < minUsd) {
+              alert("Kraken minimum for this pair is " + minUsd.toFixed(2) + " USD. Increase trade amount.");
+              approveBtn.disabled = false;
+              approveBtn.textContent = "✅ Approve Strategy";
+              return;
+            }
+
+            const result = await placeOrder(res.pair, rec.side, rec.price, { orderType: rec.orderType, price2: rec.price2 }, false);
+            alert(String(result?.message || "Order sent"));
+            await refreshUsdQuick();
+            closeModal();
+          } catch (e) {
+            const p = e.payload || {};
+            if (p && p.hint) alert(String(p.hint));
+            else alert(String(e.message || "Order failed"));
+            approveBtn.disabled = false;
+            approveBtn.textContent = "✅ Approve Strategy";
+          }
+        });
+      }
+    }
+
+    async function analyze() {
+      tableBodyEl.innerHTML = "";
+      safeListEl.textContent = "Loading...";
+      alertBoxEl.textContent = "Ranking pairs by 24h volume...";
+
+      let pairs = [];
+      try {
+        const allPairs = await getAllUsdPairs();
+        const filtered = allPairs.filter(p => !blockedPairs.has(p));
+        pairs = await getTopPairsByVolumeUsd(filtered, MAX_SCAN_PAIRS);
+      } catch (e) {
+        alertBoxEl.textContent = "Failed to load pairs. " + String(e.message || e);
+        safeListEl.textContent = "Unable to scan right now.";
+        return;
+      }
+
+      const results = [];
+
+      for (const p of pairs) {
+        try {
+          const d = await fetchOHLC(p);
+          if (d.length < RSI_PERIOD + 1) continue;
+
+          const closes = d.map(x => x.close);
+          const rsi = calculateRSI_Wilder(closes, RSI_PERIOD);
+
+          const x = closes.map((_, i) => i + 1);
+          const lr = linearRegression(closes, x);
+
+          const forecast = Array.from({ length: 5 }, (_, i) => lr.m * (x.length + i + 1) + lr.b);
+          const predChange = ((forecast[forecast.length - 1] - closes[closes.length - 1]) / closes[closes.length - 1]) * 100;
+
+          const signal = (rsi > 60 && predChange > 3) ? "🚀 Strong Buy" : "⏸ Neutral";
+          const score = buildScore(predChange, lr.m, rsi);
+
+          const rowObj = {
+            pair: p,
+            chartData: d,
+            data: d.slice(-10),
+            last: closes[closes.length - 1],
+            rsi,
+            predChange,
+            score,
+            signal
+          };
+
+          rowObj.recommended = decideStrategyOrder(rowObj, rowObj.last);
+          results.push(rowObj);
+        } catch { }
+      }
+
+      const top10 = results
+        .filter(r => r.predChange > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 10);
+
+      alertBoxEl.textContent = "Top 10 momentum coins ranked by score. Updated " + new Date().toLocaleTimeString();
+
+      for (const r of top10) {
+        const row = document.createElement("tr");
+        if (r.predChange > 8) row.classList.add("highlightRow");
+
+        row.innerHTML =
+          "<td>" + prettyPair(r.pair) + "</td>" +
+          "<td>" + r.last.toFixed(6) + "</td>" +
+          "<td style='color:" + (r.predChange > 0 ? "lightgreen" : "red") + ";'>" + r.predChange.toFixed(2) + "%</td>" +
+          "<td>" + r.rsi.toFixed(1) + "</td>" +
+          "<td>" + r.score.toFixed(2) + "</td>" +
+          "<td class='" + (r.signal.includes("Strong") ? "strongBuy" : "neutral") + "'>" + r.signal + "</td>";
+
+        row.addEventListener("click", () => showStrategyModal(r));
+        tableBodyEl.appendChild(row);
+      }
+
+      const safeTrades = results
+        .filter(r => r.recommended)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 3);
+
+      safeListEl.innerHTML = "";
+
+      if (!safeTrades.length) {
+        safeListEl.innerHTML = "<div class='muted'>No strategy approved entries right now.</div>";
+        return;
+      }
+
+      for (const r of safeTrades) {
+        const item = document.createElement("div");
+        item.className = "safeTrade";
+
+        const tag = r.recommended.tag;
+        const action = r.recommended.actionTitle;
+
+        item.innerHTML =
+          "<span style='min-width:160px; font-weight:bold;'>" + prettyPair(r.pair) + "</span>" +
+          "<span class='muted' style='flex:1 1 auto;'>" + action + "</span>" +
+          "<span class='safeTag'>" + tag + "</span>" +
+          "<span class='safeBadge'>Approved</span>";
+
+        item.addEventListener("click", () => showStrategyModal(r));
+        safeListEl.appendChild(item);
+      }
+    }
+
+    async function autoTradeCycle() {
+      if (!AUTO_TRADING_ALWAYS_ON) return;
+
+      let candidates = [];
+      try {
+        const allPairs = await getAllUsdPairs();
+        const filtered = allPairs.filter(p => !blockedPairs.has(p));
+        candidates = await getTopPairsByVolumeUsd(filtered, 20);
+      } catch {
+        return;
+      }
+
+      for (const p of candidates) {
+        try {
+          const d = await fetchOHLC(p);
+          const closes = d.map(x => x.close);
+          if (closes.length < RSI_PERIOD + 1) continue;
+
+          const rsi = calculateRSI_Wilder(closes, RSI_PERIOD);
+          const x = closes.map((_, i) => i + 1);
+          const lr = linearRegression(closes, x);
+
+          const forecastNext = lr.m * (x.length + 1) + lr.b;
+          const change = ((forecastNext - closes[closes.length - 1]) / closes[closes.length - 1]) * 100;
+
+          const res = {
+            pair: p,
+            chartData: d,
+            data: d.slice(-10),
+            last: closes[closes.length - 1],
+            rsi,
+            predChange: change,
+            score: buildScore(change, lr.m, rsi),
+            signal: (rsi > 60 && change > 3) ? "🚀 Strong Buy" : "⏸ Neutral"
+          };
+
+          const rec = decideStrategyOrder(res, res.last);
+          if (!rec) continue;
+
+          await placeOrder(p, rec.side, rec.price, { orderType: rec.orderType, price2: rec.price2 }, true);
+        } catch (e) {
+          const msg = String(e.message || "");
+          if (msg.includes("Invalid permissions") || msg.includes("trading restricted")) blockPair(p);
+        }
+      }
+    }
+
+    (async () => {
+      await refreshMode();
+      refreshUsdQuick();
+      analyze();
+
+      setInterval(refreshMode, 30000);
+      setInterval(refreshUsdQuick, 30000);
+      setInterval(analyze, 300000);
+
+      // Auto trading interval intentionally not started when AUTO_TRADING_ALWAYS_ON is false
+      // setInterval(autoTradeCycle, 60000);
+    })();
+  </script>
+</body>
+
+</html>

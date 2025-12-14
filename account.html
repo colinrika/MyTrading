@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>📒 Balance and Trades</title>
+  <style>
+    body { font-family: Arial, sans-serif; background-color: #0d1117; color: #e6edf3; margin: 0; padding: 20px; }
+    h2 { color: #58a6ff; margin: 8px 0 12px 0; text-align: center; }
+
+    .wrap { width: 92%; max-width: 1100px; margin: 0 auto; }
+    .topBar { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+    a.linkBtn { text-decoration: none; background: #58a6ff; color: #fff; font-weight: bold; border-radius: 10px; padding: 10px 14px; display: inline-block; }
+    a.linkBtn:hover { filter: brightness(1.05); }
+
+    .panel { background: #161b22; border: 2px solid #30363d; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+    .panel h3 { margin: 0 0 8px 0; font-size: 16px; }
+
+    .kv { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+    .kv:last-child { border-bottom: none; }
+
+    .muted { color: #8b949e; font-size: 12px; }
+    .good { color: lightgreen; }
+    .bad { color: #ff5555; }
+    .warn { color: #ffcc00; }
+
+    .tools { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    input { border-radius: 10px; border: 1px solid #30363d; background: #0d1117; color: #e6edf3; padding: 10px 12px; width: 280px; }
+    button { border-radius: 10px; border: none; padding: 10px 12px; font-weight: bold; cursor: pointer; background: #30363d; color: #e6edf3; }
+    button:hover { filter: brightness(1.05); }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { padding: 10px; border: 1px solid #30363d; }
+    th { background: #0d1117; text-align: left; }
+
+    .pager { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h2>📒 Balance and Trades</h2>
+
+    <div class="topBar">
+      <a class="linkBtn" href="/dashboard.html">⬅ Back to Dashboard</a>
+      <div class="muted" id="updatedText"></div>
+    </div>
+
+    <div class="panel">
+      <h3>Current Balance</h3>
+      <div id="balanceLines">
+        <div class="kv"><span class="muted">Loading balance</span><span class="muted">...</span></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Trades</h3>
+      <div class="tools">
+        <input id="searchBox" placeholder="Search pair, side, status" />
+        <button id="btnSearch">Search</button>
+        <button id="btnRefresh">Refresh</button>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Pair</th>
+            <th>Side</th>
+            <th>Status</th>
+            <th>Entry</th>
+            <th>Volume</th>
+            <th>TP</th>
+            <th>SL</th>
+            <th>Profit or Loss</th>
+          </tr>
+        </thead>
+        <tbody id="tradeBody"></tbody>
+      </table>
+
+      <div class="pager">
+        <div class="muted" id="pageText"></div>
+        <div>
+          <button id="btnPrev">Prev</button>
+          <button id="btnNext">Next</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const LIMIT = 10;
+    let page = 1;
+    let query = "";
+
+    function apiUrl(p) { return window.location.origin + p; }
+
+    async function getJson(url) {
+      const r = await fetch(url);
+      const t = await r.text();
+      let d = {};
+      try { d = JSON.parse(t); } catch { d = { raw: t }; }
+      if (!r.ok) throw new Error(d?.details || d?.error || ("Request failed " + r.status));
+      return d;
+    }
+
+    async function refreshBalance() {
+      try {
+        const d = await getJson(apiUrl("/balance"));
+        const b = d.balance || {};
+        const keys = Object.keys(b);
+
+        const wrap = document.getElementById("balanceLines");
+        wrap.innerHTML = "";
+
+        keys.sort((a, b) => a === "ZUSD" ? -1 : b === "ZUSD" ? 1 : a.localeCompare(b));
+        for (const k of keys) {
+          const v = String(b[k]);
+          const row = document.createElement("div");
+          row.className = "kv";
+          const cls = k === "ZUSD" ? "good" : "muted";
+          row.innerHTML = "<span>" + k + "</span><span class='" + cls + "'>" + v + "</span>";
+          wrap.appendChild(row);
+        }
+
+        document.getElementById("updatedText").textContent = "Updated " + new Date().toLocaleTimeString();
+      } catch (e) {
+        document.getElementById("balanceLines").innerHTML =
+          "<div class='kv'><span class='bad'>Balance error</span><span class='bad'>" + String(e.message) + "</span></div>";
+      }
+    }
+
+    function fmt(n) {
+      const x = Number(n);
+      if (!Number.isFinite(x)) return "";
+      return x.toFixed(6);
+    }
+
+    async function refreshTrades() {
+      const body = document.getElementById("tradeBody");
+      body.innerHTML = "";
+
+      let data;
+      try {
+        data = await getJson(apiUrl("/trades?page=" + page + "&limit=" + LIMIT + "&q=" + encodeURIComponent(query)));
+      } catch (e) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = "<td colspan='9' class='bad'>" + String(e.message) + "</td>";
+        body.appendChild(tr);
+        return;
+      }
+
+      const items = data.items || [];
+      for (const t of items) {
+        const tr = document.createElement("tr");
+
+        const pnl = Number(t.pnlUsd || 0);
+        const pnlCls = pnl > 0 ? "good" : (pnl < 0 ? "bad" : "muted");
+        const pnlTxt = (Number.isFinite(pnl) ? pnl.toFixed(4) : "");
+
+        tr.innerHTML =
+          "<td>" + (t.createdAt ? new Date(t.createdAt).toLocaleString() : "") + "</td>" +
+          "<td>" + String(t.pair || "") + "</td>" +
+          "<td>" + String(t.side || "") + "</td>" +
+          "<td>" + String(t.status || "") + "</td>" +
+          "<td>" + fmt(t.entryPrice) + "</td>" +
+          "<td>" + fmt(t.volume) + "</td>" +
+          "<td>" + fmt(t.takeProfit) + "</td>" +
+          "<td>" + fmt(t.stopLoss) + "</td>" +
+          "<td class='" + pnlCls + "'>" + pnlTxt + "</td>";
+
+        body.appendChild(tr);
+      }
+
+      const total = Number(data.total || 0);
+      const totalPages = Math.max(1, Math.ceil(total / LIMIT));
+      document.getElementById("pageText").textContent =
+        "Page " + page + " of " + totalPages + "   Total " + total;
+
+      document.getElementById("btnPrev").disabled = page <= 1;
+      document.getElementById("btnNext").disabled = page >= totalPages;
+    }
+
+    document.getElementById("btnSearch").addEventListener("click", () => {
+      query = String(document.getElementById("searchBox").value || "").trim();
+      page = 1;
+      refreshTrades();
+    });
+
+    document.getElementById("btnRefresh").addEventListener("click", () => {
+      refreshBalance();
+      refreshTrades();
+    });
+
+    document.getElementById("btnPrev").addEventListener("click", () => {
+      page = Math.max(1, page - 1);
+      refreshTrades();
+    });
+
+    document.getElementById("btnNext").addEventListener("click", () => {
+      page = page + 1;
+      refreshTrades();
+    });
+
+    refreshBalance();
+    refreshTrades();
+    setInterval(refreshBalance, 60000);
+    setInterval(refreshTrades, 60000);
+  </script>
+</body>
+</html>
