@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Login</title>
+  <style>
+    body { background:#0d1117; color:#e6edf3; font-family:Arial; display:flex; justify-content:center; align-items:center; height:100vh; margin:0; }
+    .card { width:360px; background:#161b22; border:2px solid #30363d; border-radius:12px; padding:18px; }
+    input { width:100%; padding:10px; margin-top:8px; background:#0d1117; border:1px solid #30363d; border-radius:8px; color:#e6edf3; }
+    button { width:100%; margin-top:12px; padding:12px; border:none; border-radius:10px; background:#58a6ff; color:white; font-weight:bold; cursor:pointer; }
+    a { color:#58a6ff; text-decoration:none; }
+    .msg { margin-top:10px; color:#ffcc00; font-size:13px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Login</h2>
+    <input id="email" placeholder="Email" />
+    <input id="password" type="password" placeholder="Password" />
+    <button id="btn">Login</button>
+    <div class="msg" id="msg"></div>
+    <div style="margin-top:12px;">
+      <a href="/register">Register</a>
+    </div>
+  </div>
+
+  <script>
+    async function postJson(url, payload) {
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload)
+      });
+      const t = await r.text();
+      let j = {};
+      try { j = JSON.parse(t); } catch { j = { raw: t }; }
+      if (!r.ok) throw new Error(j.error || j.details || "Login failed");
+      return j;
+    }
+
+    document.getElementById("btn").onclick = async () => {
+      const msg = document.getElementById("msg");
+      msg.textContent = "";
+      try {
+        const email = document.getElementById("email").value.trim();
+        const password = document.getElementById("password").value;
+        const d = await postJson("/api/login", { email, password });
+        window.location.href = d.hasKraken ? "/dashboard" : "/connect";
+      } catch (e) {
+        msg.textContent = e.message;
+      }
+    };
+  </script>
+</body>
+</html>

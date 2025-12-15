@@ -91,15 +91,46 @@
     let page = 1;
     let query = "";
 
+    let redirecting = false;
+    let intervalIds = [];
+
     function apiUrl(p) { return window.location.origin + p; }
 
+    function stopIntervals() {
+      for (const id of intervalIds) clearInterval(id);
+      intervalIds = [];
+    }
+
+    function redirectToLoginOnce() {
+      if (redirecting) return;
+      redirecting = true;
+      stopIntervals();
+      window.location.replace("/login.html");
+    }
+
     async function getJson(url) {
-      const r = await fetch(url);
+      const r = await fetch(url, { credentials: "include" });
       const t = await r.text();
       let d = {};
       try { d = JSON.parse(t); } catch { d = { raw: t }; }
-      if (!r.ok) throw new Error(d?.details || d?.error || ("Request failed " + r.status));
+
+      if (!r.ok) {
+        if (r.status === 401) {
+          redirectToLoginOnce();
+          throw new Error("Unauthorized");
+        }
+        throw new Error(d?.details || d?.error || ("Request failed " + r.status));
+      }
       return d;
+    }
+
+    async function ensureLoggedIn() {
+      try {
+        await getJson(apiUrl("/balance"));
+      } catch (e) {
+        redirectToLoginOnce();
+        throw e;
+      }
     }
 
     async function refreshBalance() {
@@ -123,8 +154,9 @@
 
         document.getElementById("updatedText").textContent = "Updated " + new Date().toLocaleTimeString();
       } catch (e) {
+        const msg = String(e.message || e);
         document.getElementById("balanceLines").innerHTML =
-          "<div class='kv'><span class='bad'>Balance error</span><span class='bad'>" + String(e.message) + "</span></div>";
+          "<div class='kv'><span class='bad'>Balance error</span><span class='bad'>" + msg + "</span></div>";
       }
     }
 
@@ -143,35 +175,44 @@
         data = await getJson(apiUrl("/trades?page=" + page + "&limit=" + LIMIT + "&q=" + encodeURIComponent(query)));
       } catch (e) {
         const tr = document.createElement("tr");
-        tr.innerHTML = "<td colspan='9' class='bad'>" + String(e.message) + "</td>";
+        tr.innerHTML = "<td colspan='9' class='bad'>" + String(e.message || e) + "</td>";
         body.appendChild(tr);
         return;
       }
 
-      const items = data.items || [];
-      for (const t of items) {
+      const items = Array.isArray(data.items) ? data.items : [];
+      if (!items.length) {
         const tr = document.createElement("tr");
-
-        const pnl = Number(t.pnlUsd || 0);
-        const pnlCls = pnl > 0 ? "good" : (pnl < 0 ? "bad" : "muted");
-        const pnlTxt = (Number.isFinite(pnl) ? pnl.toFixed(4) : "");
-
-        tr.innerHTML =
-          "<td>" + (t.createdAt ? new Date(t.createdAt).toLocaleString() : "") + "</td>" +
-          "<td>" + String(t.pair || "") + "</td>" +
-          "<td>" + String(t.side || "") + "</td>" +
-          "<td>" + String(t.status || "") + "</td>" +
-          "<td>" + fmt(t.entryPrice) + "</td>" +
-          "<td>" + fmt(t.volume) + "</td>" +
-          "<td>" + fmt(t.takeProfit) + "</td>" +
-          "<td>" + fmt(t.stopLoss) + "</td>" +
-          "<td class='" + pnlCls + "'>" + pnlTxt + "</td>";
-
+        tr.innerHTML = "<td colspan='9' class='muted'>No trades found</td>";
         body.appendChild(tr);
+      } else {
+        for (const t of items) {
+          const tr = document.createElement("tr");
+
+          const pnl = Number(t.pnlUsd || 0);
+          const pnlCls = pnl > 0 ? "good" : (pnl < 0 ? "bad" : "muted");
+          const pnlTxt = Number.isFinite(pnl) ? pnl.toFixed(4) : "";
+
+          tr.innerHTML =
+            "<td>" + (t.createdAt ? new Date(t.createdAt).toLocaleString() : "") + "</td>" +
+            "<td>" + String(t.pair || "") + "</td>" +
+            "<td>" + String(t.side || "") + "</td>" +
+            "<td>" + String(t.status || "") + "</td>" +
+            "<td>" + fmt(t.entryPrice) + "</td>" +
+            "<td>" + fmt(t.volume) + "</td>" +
+            "<td>" + fmt(t.takeProfit) + "</td>" +
+            "<td>" + fmt(t.stopLoss) + "</td>" +
+            "<td class='" + pnlCls + "'>" + pnlTxt + "</td>";
+
+          body.appendChild(tr);
+        }
       }
 
       const total = Number(data.total || 0);
       const totalPages = Math.max(1, Math.ceil(total / LIMIT));
+
+      if (page > totalPages) page = totalPages;
+
       document.getElementById("pageText").textContent =
         "Page " + page + " of " + totalPages + "   Total " + total;
 
@@ -200,10 +241,14 @@
       refreshTrades();
     });
 
-    refreshBalance();
-    refreshTrades();
-    setInterval(refreshBalance, 60000);
-    setInterval(refreshTrades, 60000);
+    (async () => {
+      await ensureLoggedIn();
+      await refreshBalance();
+      await refreshTrades();
+
+      intervalIds.push(setInterval(refreshBalance, 60000));
+      intervalIds.push(setInterval(refreshTrades, 60000));
+    })();
   </script>
 </body>
 </html>

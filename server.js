@@ -4,27 +4,166 @@ import KrakenClient from "kraken-api";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
+import crypto from "crypto";
+import sqlite3 from "sqlite3";
+import bcrypt from "bcrypt";
+import cookieParser from "cookie-parser";
+import jwt from "jsonwebtoken";
+//import dotenv from "dotenv";
+
+
+
+
+
+
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 
 dotenv.config();
+console.log("cwd", process.cwd());
+console.log("token present", !!process.env.TELEGRAM_BOT_TOKEN);
+console.log("chat present", !!process.env.TELEGRAM_CHAT_ID);
+
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+app.use(cors({ origin: true, credentials: true }));
 
-const kraken = new KrakenClient(process.env.KRAKEN_API_KEY, process.env.KRAKEN_API_SECRET);
+app.use(express.static(__dirname));
 
-// Simulator mode, set SIMULATOR_MODE=true in .env
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "dashboard.html"));
+});
+
+app.get("/trades.html", (req, res) => {
+  res.sendFile(path.join(__dirname, "trades.html"));
+});
+
+app.use("/api", express.json());
+app.use("/trade", express.json());
+
+
+// put all your API routes after this
+// app.get("/balance", ...)
+// app.post("/trade", ...)
+// app.get("/trades", ...)
+// app.post("/api/alerts/safest", ...)
+
+
+
+app.use(cookieParser());
+
 const SIMULATOR_MODE = String(process.env.SIMULATOR_MODE || "false").toLowerCase() === "true";
 
-const pairMetaCache = new Map();
-let lastPairMetaRefreshMs = 0;
-const PAIR_META_TTL_MS = 10 * 60 * 1000;
+const APP_SECRET = process.env.APP_SECRET || "";
+const ENC_KEY_B64 = process.env.ENC_KEY_BASE64 || "";
+const ENC_KEY = ENC_KEY_B64 ? Buffer.from(ENC_KEY_B64, "base64") : null;
 
-const tradeLog = [];
-let tradeIdSeq = 1;
+if (!APP_SECRET) {
+  console.error("Missing APP_SECRET in .env");
+  process.exit(1);
+}
+if (!ENC_KEY || ENC_KEY.length !== 32) {
+  console.error("ENC_KEY_BASE64 must decode to 32 bytes");
+  process.exit(1);
+}
 
-function nowIso() {
-  return new Date().toISOString();
+const DB_PATH = process.env.DB_PATH || "./app.db";
+const db = new sqlite3.Database(DB_PATH);
+
+function dbRun(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function (err) {
+      if (err) reject(err);
+      else resolve(this);
+    });
+  });
+}
+function dbGet(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => {
+      if (err) reject(err);
+      else resolve(row || null);
+    });
+  });
+}
+
+function nowMs() { return Date.now(); }
+function nowIso() { return new Date().toISOString(); }
+
+async function initDb() {
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      phone TEXT NOT NULL,
+      pass_hash TEXT NOT NULL,
+      is_verified INTEGER NOT NULL DEFAULT 0,
+      verify_code TEXT,
+      verify_expires INTEGER,
+      created_at INTEGER NOT NULL
+    );
+  `);
+
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS kraken_keys (
+      user_id INTEGER PRIMARY KEY,
+      api_key TEXT NOT NULL,
+      api_secret_enc TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+  `);
+}
+await initDb();
+
+function makeVerifyCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function encryptText(plain) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", ENC_KEY, iv);
+  const enc = Buffer.concat([cipher.update(String(plain), "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return Buffer.concat([iv, tag, enc]).toString("base64");
+}
+
+function decryptText(b64) {
+  const raw = Buffer.from(String(b64), "base64");
+  const iv = raw.subarray(0, 12);
+  const tag = raw.subarray(12, 28);
+  const enc = raw.subarray(28);
+  const decipher = crypto.createDecipheriv("aes-256-gcm", ENC_KEY, iv);
+  decipher.setAuthTag(tag);
+  const dec = Buffer.concat([decipher.update(enc), decipher.final()]);
+  return dec.toString("utf8");
+}
+
+function signToken(user) {
+  return jwt.sign({ uid: user.id, email: user.email }, APP_SECRET, { expiresIn: "7d" });
+}
+
+function authRequired(req, res, next) {
+  try {
+    const token = req.cookies?.session || "";
+    if (!token) return res.status(401).json({ error: "Not logged in" });
+    const payload = jwt.verify(token, APP_SECRET);
+    req.user = payload;
+    next();
+  } catch {
+    return res.status(401).json({ error: "Not logged in" });
+  }
+}
+
+async function getUserKrakenClient(uid) {
+  const row = await dbGet(`SELECT api_key, api_secret_enc FROM kraken_keys WHERE user_id = ?`, [uid]);
+  if (!row) return null;
+  const secret = decryptText(row.api_secret_enc);
+  return new KrakenClient(row.api_key, secret);
 }
 
 function safeStr(v) {
@@ -51,11 +190,15 @@ function trimNumberString(s) {
   return str.replace(/\.?0+$/, "");
 }
 
-async function ensurePairMetaLoaded() {
+const pairMetaCache = new Map();
+let lastPairMetaRefreshMs = 0;
+const PAIR_META_TTL_MS = 10 * 60 * 1000;
+
+async function ensurePairMetaLoaded(krakenClient) {
   const now = Date.now();
   if (pairMetaCache.size && (now - lastPairMetaRefreshMs) < PAIR_META_TTL_MS) return;
 
-  const resp = await kraken.api("AssetPairs");
+  const resp = await krakenClient.api("AssetPairs");
   const result = resp?.result || {};
 
   pairMetaCache.clear();
@@ -73,8 +216,8 @@ async function ensurePairMetaLoaded() {
   lastPairMetaRefreshMs = now;
 }
 
-async function getPairMeta(pair) {
-  await ensurePairMetaLoaded();
+async function getPairMeta(krakenClient, pair) {
+  await ensurePairMetaLoaded(krakenClient);
 
   if (pairMetaCache.has(pair)) return pairMetaCache.get(pair);
 
@@ -129,12 +272,15 @@ function validateMinimums(meta, price, volumeStr) {
   return { ok: true };
 }
 
-async function queryOrder(txid) {
-  const resp = await kraken.api("QueryOrders", { txid });
+async function queryOrder(krakenClient, txid) {
+  const resp = await krakenClient.api("QueryOrders", { txid });
   const result = resp?.result || {};
   const order = result[txid];
   return order || null;
 }
+
+const tradeLog = [];
+let tradeIdSeq = 1;
 
 function logTrade(entry) {
   const item = {
@@ -153,7 +299,8 @@ function logTrade(entry) {
     status: safeStr(entry.status),
     message: safeStr(entry.message),
     txid: safeStr(entry.txid || ""),
-    isAuto: entry.isAuto === true
+    isAuto: entry.isAuto === true,
+    userId: entry.userId ?? null
   };
 
   tradeLog.unshift(item);
@@ -161,16 +308,227 @@ function logTrade(entry) {
   return item;
 }
 
+async function sendTelegram(text) {
+  const token = process.env.TELEGRAM_BOT_TOKEN || "";
+  const chatId = process.env.TELEGRAM_CHAT_ID || "";
+  if (!token || !chatId) throw new Error("Missing TELEGRAM env values");
+
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      disable_web_page_preview: true
+    })
+  });
+
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data?.description || "Telegram send failed");
+  return data;
+}
+
+const lastSafeAlertByUser = new Map();
+
+function safeTradesSignature(safeTrades) {
+  return safeTrades
+    .slice(0, 3)
+    .map(t => {
+      const pair = String(t.pair || "");
+      const tag = String(t.recommended?.tag || "");
+      const q = Number(t.recommended?.quality || 0);
+      return pair + "|" + tag + "|" + q;
+    })
+    .join(";");
+}
+
+async function alertSafestTradesTelegram(safeTrades) {
+  if (!Array.isArray(safeTrades) || safeTrades.length === 0) return;
+
+  const lines = safeTrades.slice(0, 3).map(t => {
+    const pair = String(t.pair || "");
+    const tag = String(t.recommended?.tag || "");
+    const q = Number(t.recommended?.quality || 0);
+    const forecast = Number(t.predChange || 0).toFixed(2);
+    const rsi = Number(t.rsi || 0).toFixed(1);
+    return `${pair}  ${tag}  Q${q}  Forecast ${forecast} percent  RSI ${rsi}`;
+  });
+
+  const msg = "Safest trades detected\n" + lines.join("\n");
+  await sendTelegram(msg);
+}
+
+
+
+app.use(express.static(__dirname));
+
+app.get("/", (req, res) => res.sendFile(path.join(__dirname, "login.html")));
+app.get("/register", (req, res) => res.sendFile(path.join(__dirname, "register.html")));
+app.get("/verify", (req, res) => res.sendFile(path.join(__dirname, "verify.html")));
+app.get("/connect", (req, res) => res.sendFile(path.join(__dirname, "connect.html")));
+app.get("/dashboard", (req, res) => res.sendFile(path.join(__dirname, "dashboard.html")));
+
 app.get("/mode", (req, res) => {
   res.json({ simulator: SIMULATOR_MODE });
 });
 
-app.get("/pair-info", async (req, res) => {
+app.post("/api/register", async (req, res) => {
+  try {
+    const name = String(req.body?.name || "").trim();
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const phone = String(req.body?.phone || "").trim();
+    const password = String(req.body?.password || "");
+
+    if (!name || !email || !phone || password.length < 6) {
+      return res.status(400).json({ error: "Missing fields or password too short" });
+    }
+
+    const pass_hash = await bcrypt.hash(password, 12);
+    const code = makeVerifyCode();
+    const expires = nowMs() + 10 * 60 * 1000;
+
+    await dbRun(
+      `INSERT INTO users (name, email, phone, pass_hash, is_verified, verify_code, verify_expires, created_at)
+       VALUES (?, ?, ?, ?, 0, ?, ?, ?)`,
+      [name, email, phone, pass_hash, code, expires, nowMs()]
+    );
+
+    console.log("Verification code for", email, "is", code);
+
+    return res.json({ ok: true });
+  } catch (err) {
+    if (String(err.message || "").includes("UNIQUE")) {
+      return res.status(400).json({ error: "Email already registered" });
+    }
+    return res.status(500).json({ error: "Register failed", details: err.message });
+  }
+});
+
+app.post("/api/verify", async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const code = String(req.body?.code || "").trim();
+
+    const user = await dbGet(`SELECT * FROM users WHERE email = ?`, [email]);
+    if (!user) return res.status(400).json({ error: "Invalid email" });
+    if (Number(user.is_verified) === 1) return res.json({ ok: true });
+
+    const exp = Number(user.verify_expires || 0);
+    if (!user.verify_code || nowMs() > exp) return res.status(400).json({ error: "Code expired" });
+    if (String(user.verify_code) !== code) return res.status(400).json({ error: "Invalid code" });
+
+    await dbRun(`UPDATE users SET is_verified = 1, verify_code = NULL, verify_expires = NULL WHERE id = ?`, [user.id]);
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: "Verify failed", details: err.message });
+  }
+});
+
+app.post("/api/login", async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const password = String(req.body?.password || "");
+
+    const user = await dbGet(`SELECT * FROM users WHERE email = ?`, [email]);
+    if (!user) return res.status(400).json({ error: "Invalid login" });
+    if (Number(user.is_verified) !== 1) return res.status(403).json({ error: "Account not verified" });
+
+    const ok = await bcrypt.compare(password, user.pass_hash);
+    if (!ok) return res.status(400).json({ error: "Invalid login" });
+
+    const token = signToken(user);
+    res.cookie("session", token, { httpOnly: true, sameSite: "lax" });
+
+    const keys = await dbGet(`SELECT user_id FROM kraken_keys WHERE user_id = ?`, [user.id]);
+    return res.json({ ok: true, hasKraken: !!keys });
+  } catch (err) {
+    return res.status(500).json({ error: "Login failed", details: err.message });
+  }
+});
+
+app.post("/api/logout", (req, res) => {
+  res.clearCookie("session");
+  res.json({ ok: true });
+});
+
+app.post("/api/kraken/save", authRequired, async (req, res) => {
+  try {
+    const apiKey = String(req.body?.apiKey || "").trim();
+    const apiSecret = String(req.body?.apiSecret || "").trim();
+    if (!apiKey || !apiSecret) return res.status(400).json({ error: "Missing Kraken credentials" });
+
+    const encSecret = encryptText(apiSecret);
+
+    const existing = await dbGet(`SELECT user_id FROM kraken_keys WHERE user_id = ?`, [req.user.uid]);
+    if (existing) {
+      await dbRun(
+        `UPDATE kraken_keys SET api_key = ?, api_secret_enc = ?, updated_at = ? WHERE user_id = ?`,
+        [apiKey, encSecret, nowMs(), req.user.uid]
+      );
+    } else {
+      await dbRun(
+        `INSERT INTO kraken_keys (user_id, api_key, api_secret_enc, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+        [req.user.uid, apiKey, encSecret, nowMs(), nowMs()]
+      );
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Save failed", details: err.message });
+  }
+});
+
+app.get("/api/kraken/test", authRequired, async (req, res) => {
+  try {
+    const client = await getUserKrakenClient(req.user.uid);
+    if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
+
+    const balance = await client.api("Balance");
+    res.json({ ok: true, status: "Connected", balance: balance.result });
+  } catch (err) {
+    res.status(500).json({ error: "Connection failed", details: err.message });
+  }
+});
+
+app.post("/api/alerts/safest", authRequired, async (req, res) => {
+  try {
+    const safeTrades = Array.isArray(req.body?.safeTrades) ? req.body.safeTrades : [];
+    const uid = String(req.user.uid);
+
+    const prev = lastSafeAlertByUser.get(uid) || { hadAny: false, sig: "" };
+    const hasAny = safeTrades.length > 0;
+
+    if (!hasAny) {
+      lastSafeAlertByUser.set(uid, { hadAny: false, sig: "" });
+      return res.json({ ok: true, sent: false, reason: "empty" });
+    }
+
+    const sig = safeTradesSignature(safeTrades);
+
+    if (prev.hadAny && prev.sig === sig) {
+      return res.json({ ok: true, sent: false, reason: "already_sent_for_this_set" });
+    }
+
+    lastSafeAlertByUser.set(uid, { hadAny: true, sig });
+
+    await alertSafestTradesTelegram(safeTrades);
+
+    return res.json({ ok: true, sent: true });
+  } catch (e) {
+    return res.status(500).json({ error: "Alert failed", details: String(e.message || e) });
+  }
+});
+
+app.get("/pair-info", authRequired, async (req, res) => {
   try {
     const pair = String(req.query.pair || "");
     if (!pair) return res.status(400).json({ error: "pair is required" });
 
-    const meta = await getPairMeta(pair);
+    const client = await getUserKrakenClient(req.user.uid);
+    if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
+
+    const meta = await getPairMeta(client, pair);
     res.json({
       pair,
       wsname: meta.wsname,
@@ -184,9 +542,12 @@ app.get("/pair-info", async (req, res) => {
   }
 });
 
-app.get("/balance", async (req, res) => {
+app.get("/balance", authRequired, async (req, res) => {
   try {
-    const balance = await kraken.api("Balance");
+    const client = await getUserKrakenClient(req.user.uid);
+    if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
+
+    const balance = await client.api("Balance");
     res.json({ status: "Connected", balance: balance.result });
   } catch (err) {
     console.error("Balance check failed:", err);
@@ -194,12 +555,12 @@ app.get("/balance", async (req, res) => {
   }
 });
 
-app.get("/trades", async (req, res) => {
+app.get("/trades", authRequired, async (req, res) => {
   const page = Math.max(1, Number(req.query.page || 1));
   const pageSize = Math.max(1, Math.min(100, Number(req.query.pageSize || 10)));
   const q = String(req.query.q || "").trim().toLowerCase();
 
-  let filtered = tradeLog.slice();
+  let filtered = tradeLog.filter(t => String(t.userId) === String(req.user.uid));
   if (q) {
     filtered = filtered.filter(t => {
       const hay = (t.pair + " " + t.side + " " + t.orderType + " " + t.status + " " + t.message).toLowerCase();
@@ -214,7 +575,16 @@ app.get("/trades", async (req, res) => {
   res.json({ page, pageSize, total, items });
 });
 
-app.post("/trade", async (req, res) => {
+app.get("/api/account/status", authRequired, async (req, res) => {
+  res.json({
+    krakenConnected: Boolean(req.user.krakenConnected),
+    emailVerified: Boolean(req.user.emailVerified),
+    phoneVerified: Boolean(req.user.phoneVerified)
+  });
+});
+
+
+app.post("/trade", authRequired, async (req, res) => {
   const raw = req.body || {};
   const pair = raw.pair;
   const side = raw.side;
@@ -222,22 +592,24 @@ app.post("/trade", async (req, res) => {
   const investUsd = numOrNull(raw.investUsd);
 
   try {
+    const client = await getUserKrakenClient(req.user.uid);
+    if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
+
     if (!pair || !side) {
-      logTrade({ pair, side, orderType, investUsd, volume: "", status: "error", message: "Missing pair or side" });
+      logTrade({ pair, side, orderType, investUsd, volume: "", status: "error", message: "Missing pair or side", userId: req.user.uid });
       return res.status(400).json({ error: "Missing required trade parameters" });
     }
 
-    const meta = await getPairMeta(pair);
+    const meta = await getPairMeta(client, pair);
     const nums = formatOrderNumbers(meta, raw);
 
     if (!nums.price) {
-      logTrade({ pair, side, orderType, investUsd, volume: "", status: "error", message: "Invalid price" });
+      logTrade({ pair, side, orderType, investUsd, volume: "", status: "error", message: "Invalid price", userId: req.user.uid });
       return res.status(400).json({ error: "Invalid price" });
     }
 
     let volumeStr = null;
 
-    // Prefer investUsd for volume calculation
     if (investUsd && investUsd > 0) {
       const vol = investUsd / nums.price;
       const ld = meta.lot_decimals ?? 8;
@@ -248,7 +620,7 @@ app.post("/trade", async (req, res) => {
     }
 
     if (!volumeStr || Number(volumeStr) <= 0) {
-      logTrade({ pair, side, orderType, investUsd, volume: "", status: "error", message: "Invalid volume" });
+      logTrade({ pair, side, orderType, investUsd, volume: "", status: "error", message: "Invalid volume", userId: req.user.uid });
       return res.status(400).json({ error: "Invalid volume" });
     }
 
@@ -269,7 +641,8 @@ app.post("/trade", async (req, res) => {
         takeProfit: nums.takeProfit ?? clampPrice(meta, nums.price * 1.05),
         stopLoss: nums.stopLoss ?? clampPrice(meta, nums.price * 0.93),
         status: "rejected",
-        message: "Minimum not met. " + hint
+        message: "Minimum not met. " + hint,
+        userId: req.user.uid
       });
 
       return res.status(400).json({
@@ -307,7 +680,6 @@ app.post("/trade", async (req, res) => {
       entryParams.price2 = String(entryPrice2 ?? entryPrice);
     }
 
-    // Simulator short circuit
     if (SIMULATOR_MODE) {
       const fakeTxid = "SIM_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
       const statusTxt = "simulated";
@@ -324,7 +696,8 @@ app.post("/trade", async (req, res) => {
         status: statusTxt,
         message: msgTxt,
         txid: fakeTxid,
-        isAuto: raw.isAuto === true
+        isAuto: raw.isAuto === true,
+        userId: req.user.uid
       });
 
       return res.json({
@@ -337,12 +710,12 @@ app.post("/trade", async (req, res) => {
       });
     }
 
-    const mainOrder = await kraken.api("AddOrder", entryParams);
+    const mainOrder = await client.api("AddOrder", entryParams);
     const txid = Array.isArray(mainOrder?.result?.txid) ? mainOrder.result.txid[0] : "";
 
     let entryStatus = null;
     if (txid) {
-      try { entryStatus = await queryOrder(txid); } catch { entryStatus = null; }
+      try { entryStatus = await queryOrder(client, txid); } catch { entryStatus = null; }
     }
 
     const isFilledNow =
@@ -366,7 +739,8 @@ app.post("/trade", async (req, res) => {
       status: statusTxt,
       message: msgTxt,
       txid,
-      isAuto: raw.isAuto === true
+      isAuto: raw.isAuto === true,
+      userId: req.user.uid
     });
 
     res.json({
@@ -388,7 +762,8 @@ app.post("/trade", async (req, res) => {
       stopLoss: numOrNull(raw.stopLoss),
       status: "error",
       message: safeStr(details),
-      isAuto: raw.isAuto === true
+      isAuto: raw.isAuto === true,
+      userId: req.user.uid
     });
 
     console.error("Trade error:", err);
@@ -396,25 +771,39 @@ app.post("/trade", async (req, res) => {
   }
 });
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-app.use(express.static(__dirname));
-
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "dashboard.html"));
-});
-
 app.get("/trades.html", (req, res) => {
   res.sendFile(path.join(__dirname, "trades.html"));
 });
 
 app.use((err, req, res, next) => {
-  console.error("JSON parse error:", err.message);
-  res.status(400).json({ error: "Invalid JSON request" });
+  const isJsonParseError =
+    err instanceof SyntaxError &&
+    err.status === 400 &&
+    "body" in err;
+
+  if (isJsonParseError) {
+    return res.status(400).json({ error: "Invalid JSON request" });
+  }
+
+  next(err);
 });
+
+app.get("/api/telegram/test", async (req, res) => {
+  try {
+    const r = await sendTelegram("Test ping from server " + new Date().toISOString());
+    res.json({ ok: true, telegram: r });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
 });
+
+
+
+

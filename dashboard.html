@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="UTF-8" />
-  <title>🚀 Colin & Salote — Kraken Auto Trading Dashboard</title>
+  <title>🚀 Namu Trading</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     body {
@@ -40,9 +40,11 @@
       display: inline-flex;
       align-items: center;
       gap: 10px;
+      flex-wrap: wrap;
     }
 
-    a.linkBtn {
+    a.linkBtn,
+    button.linkBtn {
       text-decoration: none;
       background: #58a6ff;
       color: #fff;
@@ -50,9 +52,12 @@
       border-radius: 10px;
       padding: 10px 14px;
       display: inline-block;
+      border: none;
+      cursor: pointer;
     }
 
-    a.linkBtn:hover {
+    a.linkBtn:hover,
+    button.linkBtn:hover {
       filter: brightness(1.05);
     }
 
@@ -218,7 +223,6 @@
       margin-top: 10px;
     }
 
-
     .profitBox {
       border: 1px solid #30363d;
       background-color: #0d1117;
@@ -293,15 +297,27 @@
 </head>
 
 <body>
-  <h2>🚀 Colin & Salote — Kraken Auto Trading Dashboard</h2>
+  <h2>🚀 Namu Trading Dashboard</h2>
 
   <div class="topBar">
     <div class="pill">
       <span class="warn">Live trading</span>
       <span class="muted" id="usdQuick">USD loading</span>
       <span class="muted" id="modeBadge"></span>
+      <span class="muted" id="authBadge"></span>
     </div>
-    <a class="linkBtn" href="/account.html">📒 Balance and Trades</a>
+
+    <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center;">
+      <label class="pill" style="cursor:pointer;">
+        <input id="aggressiveToggle" type="checkbox" style="width:auto; margin:0 8px 0 0;">
+        <span style="font-weight:bold;">Aggressive Mode</span>
+        <span class="muted" id="aggressiveBadge">Off</span>
+      </label>
+
+      <a id="connectKrakenBtn" class="linkBtn" href="/connect-kraken.html">🔑 Connect Kraken</a>
+      <a class="linkBtn" href="/account.html">📒 Trades</a>
+      <button class="linkBtn" id="logoutBtn">🚪 Logout</button>
+    </div>
   </div>
 
   <div id="safePanel">
@@ -338,7 +354,6 @@
   <footer>📊 Created by Colin Rika</footer>
 
   <script>
-    const LIVE_MODE = true;
     const AUTO_TRADING_ALWAYS_ON = false;
 
     const MAX_SCAN_PAIRS = 60;
@@ -360,14 +375,72 @@
 
     let SIMULATOR = false;
 
+    let AGGRESSIVE_MODE = String(localStorage.getItem("AGGRESSIVE_MODE") || "false").toLowerCase() === "true";
+
+    function setAggressiveUi() {
+      const cb = document.getElementById("aggressiveToggle");
+      const badge = document.getElementById("aggressiveBadge");
+      if (cb) cb.checked = AGGRESSIVE_MODE;
+      if (badge) badge.textContent = AGGRESSIVE_MODE ? "On" : "Off";
+    }
+
+    function nextTradeWindowText() {
+      const now = new Date();
+      const h = now.getHours();
+      if (h >= 5 && h < 9) return "Trade window is open now";
+      const next = new Date(now);
+      if (h >= 9) next.setDate(now.getDate() + 1);
+      next.setHours(5, 0, 0, 0);
+      const mins = Math.max(0, Math.round((next.getTime() - now.getTime()) / 60000));
+      const hrs = Math.floor(mins / 60);
+      const rem = mins % 60;
+      return "Trade window opens at 5 AM. Time until open " + hrs + " hours " + rem + " minutes";
+    }
+
+
+    let intervalIds = [];
+    let loggedOut = false;
+    let redirecting = false;
+
     function apiUrl(p) { return window.location.origin + p; }
 
+    function startIntervals() {
+      intervalIds.push(setInterval(refreshMode, 30000));
+      intervalIds.push(setInterval(refreshUsdQuick, 30000));
+      intervalIds.push(setInterval(analyze, 300000));
+    }
+
+    function stopIntervals() {
+      for (const id of intervalIds) clearInterval(id);
+      intervalIds = [];
+    }
+
+    function redirectToLoginOnce() {
+      if (redirecting) return;
+      redirecting = true;
+      loggedOut = true;
+      stopIntervals();
+      window.location.replace("/login.html");
+    }
+
+    function toggleAccountAccess(loggedIn) {
+      const btn = document.querySelector("a[href='/account.html']");
+      if (!btn) return;
+      btn.style.display = loggedIn ? "inline-block" : "none";
+    }
+
+
     async function getJson(url) {
-      const resp = await fetch(url);
+      const resp = await fetch(url, { credentials: "include" });
       const text = await resp.text();
       let data = {};
       try { data = JSON.parse(text); } catch { data = { raw: text }; }
+
       if (!resp.ok) {
+        if (resp.status === 401) {
+          redirectToLoginOnce();
+          throw new Error("Unauthorized");
+        }
         const err = new Error(data?.details || data?.error || ("Request failed " + resp.status));
         err.payload = data;
         throw err;
@@ -379,12 +452,19 @@
       const resp = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        credentials: "include"
       });
+
       const text = await resp.text();
       let data = {};
       try { data = JSON.parse(text); } catch { data = { raw: text }; }
+
       if (!resp.ok) {
+        if (resp.status === 401) {
+          redirectToLoginOnce();
+          throw new Error("Unauthorized");
+        }
         const err = new Error(data?.details || data?.error || ("Request failed " + resp.status));
         err.payload = data;
         throw err;
@@ -392,7 +472,77 @@
       return data;
     }
 
+    async function ensureLoggedIn() {
+      try {
+        await getJson(apiUrl("/balance"));
+        document.getElementById("authBadge").textContent = "Logged in";
+        toggleAccountAccess(true);
+      } catch {
+        toggleAccountAccess(false);
+        redirectToLoginOnce();
+      }
+    }
+
+
+    function hideConnectBtn() {
+      const btn = document.getElementById("connectKrakenBtn");
+      if (btn) btn.style.display = "none";
+    }
+
+    function showConnectBtn() {
+      const btn = document.getElementById("connectKrakenBtn");
+      if (btn) btn.style.display = "inline-block";
+    }
+
+    async function checkKrakenConnectedAndToggle() {
+      try {
+        const s = await getJson(apiUrl("/api/account/status"));
+
+        const raw =
+          s?.krakenConnected ??
+          s?.connected ??
+          s?.isConnected ??
+          s?.data?.krakenConnected ??
+          s?.data?.connected;
+
+        const connected = raw === true || raw === "true" || raw === 1 || raw === "1";
+
+        if (connected) {
+          hideConnectBtn();
+          return;
+        }
+      } catch {
+        // ignore and try balance fallback
+      }
+
+      // Fallback: if balance works, you are effectively connected
+      try {
+        const d = await getJson(apiUrl("/balance"));
+        const usd = Number(d?.balance?.ZUSD);
+        if (Number.isFinite(usd)) {
+          hideConnectBtn();
+          return;
+        }
+      } catch (e) {
+        console.error("Analyze failed for pair", p, e);
+      }
+
+
+      showConnectBtn();
+    }
+
+
+    async function doLogout() {
+      loggedOut = true;
+      stopIntervals();
+      try { await postJson(apiUrl("/api/logout"), {}); } catch { }
+      redirectToLoginOnce();
+    }
+
+    document.getElementById("logoutBtn").addEventListener("click", doLogout);
+
     async function refreshMode() {
+      if (loggedOut) return;
       try {
         const m = await getJson(apiUrl("/mode"));
         SIMULATOR = m && m.simulator === true;
@@ -404,9 +554,15 @@
     }
 
     function prettyPair(pair) { return String(pair).replace("X", "").replace("ZUSD", "/USD"); }
+
     function blockPair(pair) {
       blockedPairs.add(pair);
       localStorage.setItem("blockedPairs", JSON.stringify(Array.from(blockedPairs)));
+    }
+
+    function num(v) {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
     }
 
     async function getPairInfo(pair) {
@@ -418,8 +574,8 @@
     }
 
     function calcMinUsd(pairInfo, price) {
-      const ordermin = Number(pairInfo?.ordermin || 0);
-      const costmin = Number(pairInfo?.costmin || 0);
+      const ordermin = num(pairInfo?.ordermin);
+      const costmin = num(pairInfo?.costmin);
       const byVol = (ordermin > 0) ? (ordermin * price) : 0;
       const byCost = (costmin > 0) ? costmin : 0;
       const minUsd = Math.max(byVol, byCost);
@@ -472,48 +628,197 @@
       return (predChange * 2) + (trendSlope * 10) + bonusMidRsi - penaltyOverbought;
     }
 
-    function decideStrategyOrder(res, currentPrice) {
+    function isTradeWindow() {
+      const now = new Date();
+      const hour = now.getHours();
+      return hour >= 5 && hour < 9;
+    }
+
+    function buildUserExplanation(ctx) {
+      const parts = [];
+
+      parts.push("You are viewing a " + (isTradeWindow() ? "valid trading time window" : "non trading time window") + ". " + nextTradeWindowText() + ".");
+
+      parts.push("Momentum estimate is " + Number(ctx.pred).toFixed(2) + " percent over the next few hours based on your simple trend forecast.");
+      parts.push("RSI is " + Number(ctx.rsi).toFixed(1) + ". Around 50 is neutral. Below 30 is oversold. Above 70 is overbought.");
+
+      if (ctx.uptrend) parts.push("Trend slope is positive, meaning price has been rising recently.");
+      if (ctx.downtrend) parts.push("Trend slope is negative, meaning price has been falling recently.");
+
+      if (ctx.rsiRising) parts.push("RSI has been improving recently, which can signal buyers returning.");
+      else parts.push("RSI is not clearly improving yet, so rebounds are less reliable.");
+
+      if (ctx.priceUp) parts.push("Price is currently pushing higher versus earlier candles.");
+      else parts.push("Price is not pushing higher yet, so breakouts are not confirmed.");
+
+      return parts.join(" ");
+    }
+
+    function buildNextSteps(ctx) {
+      const tips = [];
+
+      if (!isTradeWindow()) {
+        tips.push("Wait for the trade window 5 AM to 9 AM California time.");
+        return tips.join(" ");
+      }
+
+      if (ctx.pred < 3) tips.push("Forecast is weak. Wait for forecast change to reach 3 percent or more.");
+      if (ctx.downtrend) tips.push("Trend is still down. Wait for trend slope to turn positive or flatten out.");
+      if (!ctx.priceUp) tips.push("No breakout yet. Wait for price to start making higher closes.");
+      if (!ctx.rsiRising) tips.push("RSI is not improving. Wait for RSI to start rising for at least a few candles.");
+
+      if (ctx.rsi > 70) tips.push("RSI is high. If you buy here, you risk buying the top. Prefer waiting for a pullback or a confirmed breakout.");
+      if (ctx.rsi < 30) tips.push("RSI is oversold. A rebound is possible, but wait for RSI to turn upward to reduce false entries.");
+
+      if (!tips.length) tips.push("Conditions are close. Wait for one more candle confirmation.");
+
+      return tips.join(" ");
+    }
+
+
+
+    function decideStrategyOrder(res, currentPrice, aggressive) {
       const rsi = Number(res.rsi);
       const pred = Number(res.predChange);
+      const slope = Number(res.slope || 0);
 
-      if (rsi > 70 && pred < 0) {
+      const rsiSeries = Array.isArray(res.rsiHist) ? res.rsiHist : [];
+      const rsiNow = rsiSeries.length ? rsiSeries[rsiSeries.length - 1] : rsi;
+      const rsiPrev = rsiSeries.length >= 4 ? rsiSeries[rsiSeries.length - 4] : rsiNow;
+      const rsiRising = (rsiNow - rsiPrev) > 2.0;
+
+      const priceSeries = Array.isArray(res.prices) ? res.prices : [];
+      const priceNow = priceSeries.length ? priceSeries[priceSeries.length - 1] : currentPrice;
+      const pricePrev = priceSeries.length >= 4 ? priceSeries[priceSeries.length - 4] : priceNow;
+      const priceUp = priceNow > pricePrev;
+
+      const strongForecast = pred >= 5;
+      const decentForecast = pred >= 3;
+
+      const uptrend = slope > 0;
+      const downtrend = slope < 0;
+
+      const ctx = { rsi, pred, slope, uptrend, downtrend, rsiRising, priceUp };
+
+      const why = buildUserExplanation(ctx);
+      const nextSteps = buildNextSteps(ctx);
+
+      if (!isTradeWindow()) {
+        return {
+          tag: "Outside trade window",
+          actionTitle: "High potential but not safe timing",
+          details:
+            "This coin shows strong upside potential, but your strategy only trades between 5 AM and 9 AM California time. " +
+            "Outside this window, false breakouts and low liquidity are more common. " + why,
+          side: null,
+          orderType: null,
+          price: null,
+          quality: 0,
+          explain: why,
+          next: nextSteps
+        };
+      }
+
+      if (rsi > 72 && pred < 0) {
         return {
           tag: "Overbought exit",
           actionTitle: "Sell to protect gains",
-          details: "RSI is high and forecast is negative. This suggests momentum may fade. The strategy prefers reducing risk rather than holding through a pullback.",
+          details:
+            "RSI is very high and the forecast has turned negative. This often signals momentum exhaustion. " + why,
           side: "sell",
           orderType: "limit",
-          price: currentPrice
+          price: currentPrice,
+          quality: 70,
+          explain: why,
+          next: nextSteps
         };
       }
 
-      if (rsi < 40 && pred > 1.5) {
+      if (rsi <= 28 && strongForecast && rsiRising) {
         return {
           tag: "Oversold entry",
           actionTitle: "Buy after weakness",
-          details: "RSI is low and forecast is positive. The strategy assumes a rebound is possible and enters with defined take profit and stop loss.",
+          details:
+            "RSI is deeply oversold, the forecast is strong, and RSI has started turning upward. This is a rebound setup with defined risk. " +
+            why,
           side: "buy",
           orderType: "limit",
-          price: currentPrice
+          price: currentPrice,
+          quality: 80,
+          explain: why,
+          next: nextSteps
         };
       }
 
-      if (rsi >= 45 && rsi <= 55 && pred > 3) {
+      if (rsi >= 44 && rsi <= 58 && strongForecast && uptrend && priceUp) {
         const trigger = currentPrice * 1.01;
-        const limit = trigger * 1.002;
+        const limit = trigger * 1.003;
         return {
           tag: "Momentum breakout",
           actionTitle: "Buy on breakout confirmation",
-          details: "RSI is near the middle and forecast is strong. The strategy waits for price to move slightly upward, then buys using a stop limit style entry.",
+          details:
+            "Trend is already up, forecast is strong, and price is starting to push higher. The strategy waits for a small breakout confirmation before entering. " +
+            why,
           side: "buy",
           orderType: "stop-loss-limit",
           price: trigger,
-          price2: limit
+          price2: limit,
+          quality: 90,
+          explain: why,
+          next: nextSteps
         };
       }
 
-      return null;
+      if (rsi <= 35 && decentForecast && rsiRising && !downtrend) {
+        return {
+          tag: "Cautious rebound",
+          actionTitle: "Buy only if rebound forms",
+          details:
+            "RSI is low and improving, the forecast is decent, and the trend is not sharply down. This is a lower confidence rebound setup. " +
+            why,
+          side: "buy",
+          orderType: "limit",
+          price: currentPrice,
+          quality: 65,
+          explain: why,
+          next: nextSteps
+        };
+      }
+
+      if (aggressive === true) {
+        const aggressiveOk = pred >= 3 && uptrend && rsi >= 58 && rsi <= 68;
+        if (aggressiveOk) {
+          return {
+            tag: "Aggressive continuation",
+            actionTitle: "Buy strong momentum",
+            details:
+              "Aggressive Mode is enabled. This buys into a strong trend even when RSI is elevated. Higher upside potential, but higher risk of buying the top. " +
+              why,
+            side: "buy",
+            orderType: "limit",
+            price: currentPrice,
+            quality: 60,
+            explain: why,
+            next: nextSteps
+          };
+        }
+      }
+
+      return {
+        tag: "No setup",
+        actionTitle: "No trade right now",
+        details:
+          "The coin may look bullish, but conditions do not align for a safe entry according to your strategy. " + why,
+        side: null,
+        orderType: null,
+        price: null,
+        quality: 0,
+        explain: why,
+        next: nextSteps
+      };
     }
+
+
 
     function openModal() { modalEl.style.display = "block"; }
     function closeModal() { modalEl.style.display = "none"; }
@@ -521,6 +826,7 @@
     window.addEventListener("click", (e) => { if (e.target === modalEl) closeModal(); });
 
     async function refreshUsdQuick() {
+      if (loggedOut) return;
       try {
         const d = await getJson(apiUrl("/balance"));
         const usd = Number(d.balance?.ZUSD || 0);
@@ -626,11 +932,11 @@
             { label: "Price", data: prices.concat(Array(5).fill(null)), borderColor: "#4da3ff", borderWidth: 4, tension: 0.35, pointRadius: 0, yAxisID: "y" },
             { label: "Forecast", data: forecastSeries, borderColor: "rgba(77,163,255,0.70)", borderWidth: 3, borderDash: [8, 7], tension: 0.35, pointRadius: 0, yAxisID: "y" },
 
-            { label: "RSI", data: rsiHistSeries, borderColor: "rgba(0,255,153,0.95)", borderWidth: 4, tension: 0.25, pointRadius: 0, yAxisID: "y1" },
-            { label: "RSI Forecast", data: rsiForecastSeries, borderColor: "rgba(0,255,153,0.55)", borderWidth: 3, borderDash: [6, 8], tension: 0.25, pointRadius: 0, yAxisID: "y1" },
+            { label: "RSI", data: rsiHistSeries, borderColor: "#b36bff", borderWidth: 4, tension: 0.25, pointRadius: 0, yAxisID: "y1" },
+            { label: "RSI Forecast", data: rsiForecastSeries, borderColor: "rgba(179,107,255,0.55)", borderWidth: 3, borderDash: [6, 8], tension: 0.25, pointRadius: 0, yAxisID: "y1" },
 
-            { label: "Take Profit", data: Array(labels.length).fill(tp), borderColor: "rgba(0,255,0,0.60)", borderWidth: 2, borderDash: [12, 9], pointRadius: 0, yAxisID: "y" },
-            { label: "Stop Loss", data: Array(labels.length).fill(sl), borderColor: "rgba(255,80,80,0.70)", borderWidth: 2, borderDash: [12, 9], pointRadius: 0, yAxisID: "y" }
+            { label: "Take Profit", data: Array(labels.length).fill(tp), borderColor: "rgba(0,255,0,0.85)", borderWidth: 3, borderDash: [12, 9], pointRadius: 0, yAxisID: "y" },
+            { label: "Stop Loss", data: Array(labels.length).fill(sl), borderColor: "rgba(255,80,80,0.75)", borderWidth: 3, borderDash: [12, 9], pointRadius: 0, yAxisID: "y" }
           ]
         },
         options: {
@@ -678,25 +984,20 @@
             },
             y: {
               title: { display: true, text: "Price", color: "#4da3ff", font: { size: 16, weight: "bold" } },
-              ticks: {
-                color: "#4da3ff",
-                font: { size: 13, weight: "bold" },
-                callback: function (v) { return Number(v).toFixed(6); }
-              },
+              ticks: { color: "#4da3ff", font: { size: 13, weight: "bold" }, callback: v => Number(v).toFixed(6) },
               grid: { color: "rgba(77,163,255,0.10)" }
             },
             y1: {
               position: "right",
               min: 20,
               max: 80,
-              title: { display: true, text: "RSI", color: "#00ff99", font: { size: 16, weight: "bold" } },
-              ticks: { color: "#00ff99", stepSize: 10, font: { size: 13, weight: "bold" } },
+              title: { display: true, text: "RSI", color: "#b36bff", font: { size: 16, weight: "bold" } },
+              ticks: { color: "#b36bff", stepSize: 10, font: { size: 13, weight: "bold" } },
               grid: { drawOnChartArea: false }
             }
           }
         }
       });
-
 
       return { entry, tp, sl };
     }
@@ -754,7 +1055,8 @@
 
     async function showStrategyModal(res) {
       const chartBuilt = buildModalChart(res);
-      const rec = decideStrategyOrder(res, chartBuilt.entry);
+      const rec = decideStrategyOrder(res, chartBuilt.entry, AGGRESSIVE_MODE);
+
 
       modalTitleEl.textContent = prettyPair(res.pair) + " " + res.signal;
 
@@ -765,6 +1067,11 @@
       const recDetails = rec
         ? ("<div class='muted' style='margin-top:6px;'>" + rec.details + "</div>")
         : ("<div class='muted' style='margin-top:6px;'>Your rules do not see a safe entry. No trade is a valid outcome.</div>");
+
+      const nextLine = rec && rec.next
+        ? ("<div class='profitBox' style='margin-top:12px;'><div class='muted'>What to watch next</div><div style='margin-top:6px; font-weight:bold;'>" + rec.next + "</div></div>")
+        : "";
+
 
       modalContentEl.innerHTML =
         "<div class='profitBox'>" +
@@ -778,9 +1085,12 @@
         "<div class='muted'>Decision</div>" +
         "<div style='margin-top:2px;'>" + recLine + "</div>" +
         recDetails +
+        nextLine +
         "</div>" +
         "</div>" +
         "</div>" +
+        "</div>" +
+
         "<div class='profitBox'>" +
         "<div class='rowFlex'>" +
         "<div>" +
@@ -795,13 +1105,12 @@
         "<option value='100'>100</option>" +
         "</select>" +
         "</div>" +
+
         "<div>" +
         "<div class='muted'>Strategy order preview</div>" +
         "<div id='orderPreviewBox' class='profitBox'></div>" +
-
         "<div class='muted' style='margin-top:10px;'>Balance and profit estimate</div>" +
         "<div id='estimateBox' class='profitBox'></div>" +
-
         "<button id='btnApprove' class='primaryBtn' " + (rec ? "" : "disabled") + ">✅ Approve Strategy</button>" +
         "<div class='muted' style='margin-top:8px;'>Live trades may place exits only after entry fills.</div>" +
         "</div>" +
@@ -812,9 +1121,7 @@
 
       const estimateBox = document.getElementById("estimateBox");
       const orderPreviewBox = document.getElementById("orderPreviewBox");
-
       const approveBtn = document.getElementById("btnApprove");
-
       const pairInfo = await getPairInfo(res.pair);
 
       async function refreshEst() {
@@ -828,6 +1135,7 @@
           if (orderPreviewBox) {
             const amt = Number(document.getElementById("tradeAmount").value || 0);
             const pct = Number(document.getElementById("investSelect").value || 0);
+
             const modeTxt = (amt > 0) ? "Fixed USD" : ("Percent of USD " + pct.toFixed(0) + " percent");
 
             const sideTxt = rec ? String(rec.side).toUpperCase() : "N A";
@@ -838,12 +1146,11 @@
             orderPreviewBox.innerHTML =
               "<div class='muted'>Mode</div><div style='font-weight:bold;'>" + modeTxt + "</div>" +
               "<div class='muted' style='margin-top:8px;'>Side and type</div><div style='font-weight:bold;'>" + sideTxt + " " + typeTxt + "</div>" +
-              "<div class='muted' style='margin-top:8px;'>Invest amount</div><div class='warn' style='font-weight:bold; font-size:16px;'>" + est.invest.toFixed(2) + " USD</div>" +
+              "<div class='muted' style='margin-top:8px;'>Buy amount</div><div class='warn' style='font-weight:bold; font-size:16px;'>" + est.invest.toFixed(2) + " USD</div>" +
               "<div class='muted' style='margin-top:8px;'>Estimated quantity</div><div class='muted' style='font-weight:bold;'>" + est.qty.toFixed(6) + "</div>" +
               "<div class='muted' style='margin-top:8px;'>Entry trigger</div><div class='good' style='font-weight:bold;'>" + priceTxt + "</div>" +
               (price2Txt ? "<div class='muted' style='margin-top:8px;'>Entry limit</div><div class='good' style='font-weight:bold;'>" + price2Txt + "</div>" : "");
           }
-
 
           const minUsd = calcMinUsd(pairInfo, entryPrice);
           const tooSmall = (minUsd > 0 && est.invest > 0 && est.invest < minUsd);
@@ -851,15 +1158,14 @@
 
           estimateBox.innerHTML =
             "<div class='muted'>USD balance</div><div class='good' style='font-weight:bold; font-size:16px;'>" + est.usd.toFixed(4) + "</div>" +
-            "<div class='muted' style='margin-top:8px;'>Invest amount</div><div class='" + (overBalance ? "bad" : (tooSmall ? "bad" : "warn")) + "' style='font-weight:bold; font-size:16px;'>" + est.invest.toFixed(2) + "</div>" +
+            "<div class='muted' style='margin-top:8px;'>Buy amount</div><div class='" + (overBalance ? "bad" : (tooSmall ? "bad" : "warn")) + "' style='font-weight:bold; font-size:16px;'>" + est.invest.toFixed(2) + "</div>" +
             (minUsd > 0
               ? "<div class='muted' style='margin-top:8px;'>Minimum for this pair</div><div class='" + (tooSmall ? "bad" : "muted") + "' style='font-weight:bold; font-size:14px;'>" + minUsd.toFixed(2) + " USD</div>"
               : "") +
-            "<div class='muted' style='margin-top:8px;'>Estimated quantity</div><div class='muted' style='font-weight:bold; font-size:14px;'>" + est.qty.toFixed(6) + "</div>" +
             "<div class='muted' style='margin-top:8px;'>Estimated profit at TP</div><div class='good' style='font-weight:bold; font-size:16px;'>" + est.estProfit.toFixed(4) + " USD</div>" +
             "<div class='muted' style='margin-top:8px;'>Estimated loss at SL</div><div class='bad' style='font-weight:bold; font-size:16px;'>" + est.estLoss.toFixed(4) + " USD</div>" +
             "<div class='muted' style='margin-top:6px;'>Estimates ignore fees and slippage.</div>" +
-            (tooSmall ? "<div class='bad' style='margin-top:10px; font-weight:bold;'>Trade amount is below Kraken minimum. Increase it to at least " + minUsd.toFixed(2) + " USD.</div>" : "");
+            (tooSmall ? "<div class='bad' style='margin-top:10px; font-weight:bold;'>Buy amount is below Kraken minimum. Increase to at least " + minUsd.toFixed(2) + " USD.</div>" : "");
 
           if (approveBtn) {
             approveBtn.disabled = (!rec) || tooSmall || (est.invest <= 0) || overBalance;
@@ -893,7 +1199,7 @@
 
             const minUsd = calcMinUsd(pairInfo, chartBuilt.entry);
             if (minUsd > 0 && invest < minUsd) {
-              alert("Kraken minimum for this pair is " + minUsd.toFixed(2) + " USD. Increase trade amount.");
+              alert("Kraken minimum for this pair is " + minUsd.toFixed(2) + " USD. Increase buy amount.");
               approveBtn.disabled = false;
               approveBtn.textContent = "✅ Approve Strategy";
               return;
@@ -915,6 +1221,8 @@
     }
 
     async function analyze() {
+      if (loggedOut) return;
+
       tableBodyEl.innerHTML = "";
       safeListEl.textContent = "Loading...";
       alertBoxEl.textContent = "Ranking pairs by 24h volume...";
@@ -946,9 +1254,6 @@
           const forecast = Array.from({ length: 5 }, (_, i) => lr.m * (x.length + i + 1) + lr.b);
           const predChange = ((forecast[forecast.length - 1] - closes[closes.length - 1]) / closes[closes.length - 1]) * 100;
 
-          const signal = (rsi > 60 && predChange > 3) ? "🚀 Strong Buy" : "⏸ Neutral";
-          const score = buildScore(predChange, lr.m, rsi);
-
           const rowObj = {
             pair: p,
             chartData: d,
@@ -956,13 +1261,20 @@
             last: closes[closes.length - 1],
             rsi,
             predChange,
-            score,
-            signal
+            score: buildScore(predChange, lr.m, rsi),
+            signal: (rsi > 60 && predChange > 3) ? "🚀 Strong Buy" : "⏸ Neutral",
+            slope: lr.m,
+            prices: closes,
+            rsiHist: closes.map((_, i) => calculateRSI_Wilder(closes.slice(0, i + 1), RSI_PERIOD))
           };
 
-          rowObj.recommended = decideStrategyOrder(rowObj, rowObj.last);
+          rowObj.recommended = decideStrategyOrder(rowObj, rowObj.last, AGGRESSIVE_MODE);
+
           results.push(rowObj);
-        } catch { }
+        } catch (e) {
+          console.error("Analyze failed for pair", p, e);
+        }
+
       }
 
       const top10 = results
@@ -989,9 +1301,11 @@
       }
 
       const safeTrades = results
-        .filter(r => r.recommended)
-        .sort((a, b) => b.score - a.score)
+        .filter(r => r.recommended && (r.recommended.quality || 0) >= 80)
+        .sort((a, b) => (b.recommended.quality || 0) - (a.recommended.quality || 0))
         .slice(0, 3);
+
+      try { await postJson(apiUrl("/api/alerts/safest"), { safeTrades }); } catch { }
 
       safeListEl.innerHTML = "";
 
@@ -1011,7 +1325,7 @@
           "<span style='min-width:160px; font-weight:bold;'>" + prettyPair(r.pair) + "</span>" +
           "<span class='muted' style='flex:1 1 auto;'>" + action + "</span>" +
           "<span class='safeTag'>" + tag + "</span>" +
-          "<span class='safeBadge'>Approved</span>";
+          "<span class='safeBadge'>Q " + (r.recommended.quality || 0) + "</span>";
 
         item.addEventListener("click", () => showStrategyModal(r));
         safeListEl.appendChild(item);
@@ -1020,62 +1334,27 @@
 
     async function autoTradeCycle() {
       if (!AUTO_TRADING_ALWAYS_ON) return;
-
-      let candidates = [];
-      try {
-        const allPairs = await getAllUsdPairs();
-        const filtered = allPairs.filter(p => !blockedPairs.has(p));
-        candidates = await getTopPairsByVolumeUsd(filtered, 20);
-      } catch {
-        return;
-      }
-
-      for (const p of candidates) {
-        try {
-          const d = await fetchOHLC(p);
-          const closes = d.map(x => x.close);
-          if (closes.length < RSI_PERIOD + 1) continue;
-
-          const rsi = calculateRSI_Wilder(closes, RSI_PERIOD);
-          const x = closes.map((_, i) => i + 1);
-          const lr = linearRegression(closes, x);
-
-          const forecastNext = lr.m * (x.length + 1) + lr.b;
-          const change = ((forecastNext - closes[closes.length - 1]) / closes[closes.length - 1]) * 100;
-
-          const res = {
-            pair: p,
-            chartData: d,
-            data: d.slice(-10),
-            last: closes[closes.length - 1],
-            rsi,
-            predChange: change,
-            score: buildScore(change, lr.m, rsi),
-            signal: (rsi > 60 && change > 3) ? "🚀 Strong Buy" : "⏸ Neutral"
-          };
-
-          const rec = decideStrategyOrder(res, res.last);
-          if (!rec) continue;
-
-          await placeOrder(p, rec.side, rec.price, { orderType: rec.orderType, price2: rec.price2 }, true);
-        } catch (e) {
-          const msg = String(e.message || "");
-          if (msg.includes("Invalid permissions") || msg.includes("trading restricted")) blockPair(p);
-        }
-      }
+      if (loggedOut) return;
     }
 
-    (async () => {
-      await refreshMode();
-      refreshUsdQuick();
+    document.getElementById("aggressiveToggle")?.addEventListener("change", (e) => {
+      AGGRESSIVE_MODE = !!e.target.checked;
+      localStorage.setItem("AGGRESSIVE_MODE", String(AGGRESSIVE_MODE));
+      setAggressiveUi();
       analyze();
+    });
 
-      setInterval(refreshMode, 30000);
-      setInterval(refreshUsdQuick, 30000);
-      setInterval(analyze, 300000);
 
-      // Auto trading interval intentionally not started when AUTO_TRADING_ALWAYS_ON is false
-      // setInterval(autoTradeCycle, 60000);
+    (async () => {
+      setAggressiveUi();
+      await ensureLoggedIn();
+      await checkKrakenConnectedAndToggle();
+
+      await refreshMode();
+      await refreshUsdQuick();
+      await analyze();
+
+      startIntervals();
     })();
   </script>
 </body>
