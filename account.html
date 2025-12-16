@@ -2,15 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>📒 Account</title>
+  <title>📒 Balance and Trades</title>
   <style>
     body { font-family: Arial, sans-serif; background-color: #0d1117; color: #e6edf3; margin: 0; padding: 20px; }
     h2 { color: #58a6ff; margin: 8px 0 12px 0; text-align: center; }
 
-    .wrap { width: 92%; max-width: 1200px; margin: 0 auto; }
+    .wrap { width: 92%; max-width: 1100px; margin: 0 auto; }
     .topBar { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
-    a.linkBtn, button.linkBtn { text-decoration: none; background: #58a6ff; color: #fff; font-weight: bold; border-radius: 10px; padding: 10px 14px; display: inline-block; border: 0; cursor: pointer; }
-    a.linkBtn:hover, button.linkBtn:hover { filter: brightness(1.05); }
+    a.linkBtn { text-decoration: none; background: #58a6ff; color: #fff; font-weight: bold; border-radius: 10px; padding: 10px 14px; display: inline-block; }
+    a.linkBtn:hover { filter: brightness(1.05); }
 
     .panel { background: #161b22; border: 2px solid #30363d; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
     .panel h3 { margin: 0 0 8px 0; font-size: 16px; }
@@ -23,33 +23,21 @@
     .bad { color: #ff5555; }
     .warn { color: #ffcc00; }
 
-    .tools { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
-    input { border-radius: 10px; border: 1px solid #30363d; background: #0d1117; color: #e6edf3; padding: 10px 12px; width: 300px; }
+    .tools { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    input { border-radius: 10px; border: 1px solid #30363d; background: #0d1117; color: #e6edf3; padding: 10px 12px; width: 280px; }
     button { border-radius: 10px; border: none; padding: 10px 12px; font-weight: bold; cursor: pointer; background: #30363d; color: #e6edf3; }
     button:hover { filter: brightness(1.05); }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
 
     table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-    th, td { padding: 10px; border: 1px solid #30363d; vertical-align: top; }
-    th { background: #0d1117; text-align: left; position: sticky; top: 0; z-index: 1; }
+    th, td { padding: 10px; border: 1px solid #30363d; }
+    th { background: #0d1117; text-align: left; }
 
     .pager { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
-
-    .badge { display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 12px; border: 1px solid #30363d; background: #0d1117; }
-    .badge.ok { color: lightgreen; }
-    .badge.wait { color: #ffcc00; }
-    .badge.no { color: #ff5555; }
-
-    .rowActions { display: flex; gap: 8px; flex-wrap: wrap; }
-    .miniBtn { padding: 8px 10px; border-radius: 10px; font-weight: bold; border: 1px solid #30363d; background: #0d1117; color: #e6edf3; cursor: pointer; }
-    .miniBtn:hover { filter: brightness(1.08); }
-    .miniBtn.danger { border-color: rgba(255,85,85,0.7); }
-    .miniBtn.good { border-color: rgba(144,238,144,0.7); }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h2>📒 Account</h2>
+    <h2>📒 Balance and Trades</h2>
 
     <div class="topBar">
       <a class="linkBtn" href="/dashboard.html">⬅ Back to Dashboard</a>
@@ -64,16 +52,11 @@
     </div>
 
     <div class="panel">
-      <h3>Orders and Trades</h3>
-
+      <h3>Trades</h3>
       <div class="tools">
-        <input id="searchBox" placeholder="Search pair, side, status, message" />
+        <input id="searchBox" placeholder="Search pair, side, status" />
         <button id="btnSearch">Search</button>
         <button id="btnRefresh">Refresh</button>
-      </div>
-
-      <div class="muted" style="margin-top:8px;">
-        Cancel shows only for pending entries. Sell now shows only for filled buys. Current price is from public market data.
       </div>
 
       <table>
@@ -84,12 +67,11 @@
             <th>Side</th>
             <th>Status</th>
             <th>Entry</th>
-            <th>Current</th>
             <th>Volume</th>
             <th>TP</th>
             <th>SL</th>
-            <th>PnL</th>
-            <th>Actions</th>
+            <th>Gross PnL</th>
+            <th>Net PnL</th>
           </tr>
         </thead>
         <tbody id="tradeBody"></tbody>
@@ -102,76 +84,48 @@
           <button id="btnNext">Next</button>
         </div>
       </div>
+
+      <div class="muted" style="margin-top:10px;">
+        Net PnL is gross PnL minus fees. If your API does not send fees yet, net will match gross.
+      </div>
     </div>
   </div>
 
   <script>
-    const PAGE_SIZE = 10;
+    const LIMIT = 10;
     let page = 1;
     let query = "";
     let redirecting = false;
 
     function apiUrl(p) { return window.location.origin + p; }
 
+    function redirectToLoginOnce() {
+      if (redirecting) return;
+      redirecting = true;
+      window.location.replace("/login.html");
+    }
+
     async function getJson(url) {
       const r = await fetch(url, { credentials: "include" });
       const t = await r.text();
       let d = {};
       try { d = JSON.parse(t); } catch { d = { raw: t }; }
+
       if (!r.ok) {
         if (r.status === 401) {
-          if (!redirecting) {
-            redirecting = true;
-            window.location.replace("/login.html");
-          }
+          redirectToLoginOnce();
+          throw new Error("Unauthorized");
         }
         throw new Error(d?.details || d?.error || ("Request failed " + r.status));
       }
       return d;
     }
 
-    async function postJson(url, payload) {
-      const r = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify(payload || {})
-      });
-      const t = await r.text();
-      let d = {};
-      try { d = JSON.parse(t); } catch { d = { raw: t }; }
-      if (!r.ok) {
-        if (r.status === 401) {
-          if (!redirecting) {
-            redirecting = true;
-            window.location.replace("/login.html");
-          }
-        }
-        throw new Error(d?.details || d?.error || ("Request failed " + r.status));
-      }
-      return d;
-    }
-
-    async function ensureLoggedIn() {
-      await getJson(apiUrl("/balance"));
-    }
-
-    function fmt(n, dec = 6) {
+    function fmt(n, dp) {
       const x = Number(n);
       if (!Number.isFinite(x)) return "";
-      return x.toFixed(dec);
-    }
-
-    function prettyPair(pair) { return String(pair || "").replace("X", "").replace("ZUSD", "/USD"); }
-
-    function statusBadge(status) {
-      const s = String(status || "").toLowerCase();
-      if (s === "filled" || s === "closed") return "<span class='badge ok'>Filled</span>";
-      if (s === "submitted" || s === "open" || s === "pending") return "<span class='badge wait'>Pending</span>";
-      if (s === "rejected") return "<span class='badge no'>Rejected</span>";
-      if (s === "error") return "<span class='badge no'>Error</span>";
-      if (!s) return "<span class='badge wait'>Unknown</span>";
-      return "<span class='badge wait'>" + s + "</span>";
+      const d = Number.isFinite(dp) ? dp : 6;
+      return x.toFixed(d);
     }
 
     async function refreshBalance() {
@@ -183,7 +137,7 @@
         const wrap = document.getElementById("balanceLines");
         wrap.innerHTML = "";
 
-        keys.sort((a, c) => a === "ZUSD" ? -1 : c === "ZUSD" ? 1 : a.localeCompare(c));
+        keys.sort((a, b) => a === "ZUSD" ? -1 : b === "ZUSD" ? 1 : a.localeCompare(b));
         for (const k of keys) {
           const v = String(b[k]);
           const row = document.createElement("div");
@@ -200,134 +154,51 @@
       }
     }
 
-    async function fetchTickerPrices(pairs) {
-      const out = new Map();
-      const uniq = Array.from(new Set((pairs || []).filter(Boolean)));
-      const chunkSize = 20;
-
-      for (let i = 0; i < uniq.length; i += chunkSize) {
-        const chunk = uniq.slice(i, i + chunkSize);
-        const url = "https://api.kraken.com/0/public/Ticker?pair=" + encodeURIComponent(chunk.join(","));
-        try {
-          const r = await fetch(url);
-          const j = await r.json();
-          const result = j.result || {};
-          for (const pairKey of chunk) {
-            const obj = result[pairKey] || result[Object.keys(result)[0]];
-            const last = Number(obj?.c?.[0]);
-            if (Number.isFinite(last)) out.set(pairKey, last);
-          }
-        } catch {
-        }
-      }
-      return out;
-    }
-
-    function calcLivePnlUsd(item, currentPrice) {
-      const entry = Number(item.entryPrice);
-      const vol = Number(item.volume);
-      if (!Number.isFinite(entry) || !Number.isFinite(vol) || !Number.isFinite(currentPrice)) return null;
-
-      const side = String(item.side || "").toLowerCase();
-      if (side === "buy") return (currentPrice - entry) * vol;
-      if (side === "sell") return (entry - currentPrice) * vol;
-      return null;
-    }
-
-    async function cancelOrder(txid) {
-      if (!txid) return;
-      const ok = confirm("Cancel this order?");
-      if (!ok) return;
-      const r = await postJson(apiUrl("/api/order/cancel"), { txid });
-      alert(String(r?.message || "Cancel requested"));
-      await refreshTrades();
-    }
-
-    async function sellNow(pair, volume) {
-      const ok = confirm("Sell now at market?");
-      if (!ok) return;
-      const r = await postJson(apiUrl("/api/order/sell-now"), { pair, volume });
-      alert(String(r?.message || "Sell requested"));
-      await refreshTrades();
-      await refreshBalance();
-    }
-
     async function refreshTrades() {
       const body = document.getElementById("tradeBody");
       body.innerHTML = "";
 
       let data;
       try {
-        data = await getJson(apiUrl("/trades?page=" + page + "&pageSize=" + PAGE_SIZE + "&q=" + encodeURIComponent(query)));
+        data = await getJson(apiUrl("/trades?page=" + page + "&pageSize=" + LIMIT + "&q=" + encodeURIComponent(query)));
       } catch (e) {
         const tr = document.createElement("tr");
-        tr.innerHTML = "<td colspan='11' class='bad'>" + String(e.message) + "</td>";
+        tr.innerHTML = "<td colspan='10' class='bad'>" + String(e.message) + "</td>";
         body.appendChild(tr);
         return;
       }
 
       const items = data.items || [];
-      const pairs = items.map(x => x.pair);
-      const priceMap = await fetchTickerPrices(pairs);
 
       for (const t of items) {
         const tr = document.createElement("tr");
 
-        const current = priceMap.get(t.pair);
-        const pnl = calcLivePnlUsd(t, current);
-        const pnlCls = pnl > 0 ? "good" : (pnl < 0 ? "bad" : "muted");
-        const pnlTxt = pnl === null ? "" : pnl.toFixed(4);
+        const gross = Number(t.pnlUsd ?? t.grossPnlUsd ?? t.pnl ?? 0);
+        const fee = Number(t.feeUsd ?? t.feesUsd ?? 0);
+        const net = (Number.isFinite(gross) ? (gross - (Number.isFinite(fee) ? fee : 0)) : 0);
 
-        const st = String(t.status || "");
-        const isPending = st.toLowerCase() === "submitted";
-        const isFilledBuy = st.toLowerCase() === "filled" && String(t.side || "").toLowerCase() === "buy";
-
-        const hasTxid = String(t.txid || "").trim().length > 0;
-        const canCancel = isPending && hasTxid;
-
-        const volNum = Number(t.volume);
-        const canSellNow = isFilledBuy && Number.isFinite(volNum) && volNum > 0;
-
-        const actionsHtml =
-          "<div class='rowActions'>" +
-          "<button class='miniBtn danger' " + (canCancel ? "" : "disabled") + " data-act='cancel' data-txid='" + String(t.txid || "") + "'>Cancel</button>" +
-          "<button class='miniBtn good' " + (canSellNow ? "" : "disabled") + " data-act='sellnow' data-pair='" + String(t.pair || "") + "' data-vol='" + String(t.volume || "") + "'>Sell now</button>" +
-          "</div>";
+        const grossCls = gross > 0 ? "good" : (gross < 0 ? "bad" : "muted");
+        const netCls = net > 0 ? "good" : (net < 0 ? "bad" : "muted");
 
         tr.innerHTML =
-          "<td>" + (t.time ? new Date(t.time).toLocaleString() : "") + "</td>" +
-          "<td>" + prettyPair(t.pair) + "</td>" +
+          "<td>" + (t.time ? new Date(t.time).toLocaleString() : (t.createdAt ? new Date(t.createdAt).toLocaleString() : "")) + "</td>" +
+          "<td>" + String(t.pair || "") + "</td>" +
           "<td>" + String(t.side || "") + "</td>" +
-          "<td>" + statusBadge(t.status) + "</td>" +
-          "<td>" + fmt(t.entryPrice, 6) + "</td>" +
-          "<td>" + (Number.isFinite(current) ? fmt(current, 6) : "<span class='muted'>n a</span>") + "</td>" +
-          "<td>" + fmt(t.volume, 8) + "</td>" +
-          "<td>" + fmt(t.takeProfit, 6) + "</td>" +
-          "<td>" + fmt(t.stopLoss, 6) + "</td>" +
-          "<td class='" + pnlCls + "'>" + pnlTxt + "</td>" +
-          "<td>" + actionsHtml + "</td>";
+          "<td>" + String(t.status || "") + "</td>" +
+          "<td>" + fmt(t.entryPrice ?? t.entry, 6) + "</td>" +
+          "<td>" + fmt(t.volume, 6) + "</td>" +
+          "<td>" + fmt(t.takeProfit ?? t.tp, 6) + "</td>" +
+          "<td>" + fmt(t.stopLoss ?? t.sl, 6) + "</td>" +
+          "<td class='" + grossCls + "'>" + (Number.isFinite(gross) ? gross.toFixed(4) : "") + "</td>" +
+          "<td class='" + netCls + "'>" + (Number.isFinite(net) ? net.toFixed(4) : "") + "</td>";
 
         body.appendChild(tr);
       }
 
-      body.querySelectorAll("button[data-act='cancel']").forEach(btn => {
-        btn.addEventListener("click", async () => {
-          const txid = btn.getAttribute("data-txid") || "";
-          try { await cancelOrder(txid); } catch (e) { alert(String(e.message || e)); }
-        });
-      });
-
-      body.querySelectorAll("button[data-act='sellnow']").forEach(btn => {
-        btn.addEventListener("click", async () => {
-          const pair = btn.getAttribute("data-pair") || "";
-          const volume = btn.getAttribute("data-vol") || "";
-          try { await sellNow(pair, volume); } catch (e) { alert(String(e.message || e)); }
-        });
-      });
-
       const total = Number(data.total || 0);
-      const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-      document.getElementById("pageText").textContent = "Page " + page + " of " + totalPages + "   Total " + total;
+      const totalPages = Math.max(1, Math.ceil(total / LIMIT));
+      document.getElementById("pageText").textContent =
+        "Page " + page + " of " + totalPages + "   Total " + total;
 
       document.getElementById("btnPrev").disabled = page <= 1;
       document.getElementById("btnNext").disabled = page >= totalPages;
@@ -354,16 +225,10 @@
       refreshTrades();
     });
 
-    (async () => {
-      try {
-        await ensureLoggedIn();
-        await refreshBalance();
-        await refreshTrades();
-        setInterval(refreshBalance, 60000);
-        setInterval(refreshTrades, 60000);
-      } catch {
-      }
-    })();
+    refreshBalance();
+    refreshTrades();
+    setInterval(refreshBalance, 60000);
+    setInterval(refreshTrades, 60000);
   </script>
 </body>
 </html>

@@ -135,6 +135,8 @@ async function getUserKrakenClient(uid) {
   return new KrakenClient(row.api_key, secret);
 }
 
+
+
 function numOrNull(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
@@ -1017,6 +1019,44 @@ app.post("/trade", authRequired, async (req, res) => {
     res.status(500).json({ error: "Trade execution failed", details });
   }
 });
+
+app.post("/api/orders/cancel", authRequired, async (req, res) => {
+  try {
+    const txid = String(req.body?.txid || "").trim();
+    if (!txid) return res.status(400).json({ ok: false, error: "Missing txid" });
+
+    if (String(txid).startsWith("SIM_")) {
+      return res.json({ ok: true, canceled: true, simulator: true });
+    }
+
+    const client = await getUserKrakenClient(req.user.uid);
+    if (!client) return res.status(400).json({ ok: false, error: "No Kraken keys saved" });
+
+    const r = await client.api("CancelOrder", { txid });
+
+    return res.json({
+      ok: true,
+      canceled: true,
+      result: r?.result || null
+    });
+  } catch (err) {
+    const msg = String(err?.message || err);
+    const apiErr = Array.isArray(err?.response?.error) ? err.response.error.join(", ") : "";
+
+    const combined = (apiErr || msg || "").toString();
+
+    if (combined.includes("EOrder:Unknown order")) {
+      return res.status(400).json({
+        ok: false,
+        error: "Unknown order",
+        hint: "This order is not open anymore, or you are not sending the real txid."
+      });
+    }
+
+    return res.status(500).json({ ok: false, error: "Cancel failed", details: combined });
+  }
+});
+
 
 /* JSON parse guard */
 app.use((err, req, res, next) => {
