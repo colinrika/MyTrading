@@ -322,7 +322,7 @@
 
   <div id="safePanel">
     <h3>🛡️ Safest Trades Right Now</h3>
-    <div class="muted">This list only shows items your strategy would actually approve.</div>
+    <div class="muted">This list only shows fresh reclaim setups from the last few five minute candles.</div>
     <div id="safeTradesList">Loading...</div>
   </div>
 
@@ -357,9 +357,16 @@
     const AUTO_TRADING_ALWAYS_ON = false;
 
     const MAX_SCAN_PAIRS = 60;
-    const OHLC_INTERVAL_MIN = 60;
-    const OHLC_CANDLES = 60;
+
     const RSI_PERIOD = 14;
+
+    const H1_INTERVAL_MIN = 60;
+    const H4_INTERVAL_MIN = 240;
+    const M5_INTERVAL_MIN = 5;
+
+    const H1_CANDLES = 260;
+    const H4_CANDLES = 260;
+    const M5_CANDLES = 180;
 
     const blockedPairs = new Set(JSON.parse(localStorage.getItem("blockedPairs") || "[]"));
 
@@ -397,7 +404,6 @@
       return "Trade window opens at 5 AM. Time until open " + hrs + " hours " + rem + " minutes";
     }
 
-
     let intervalIds = [];
     let loggedOut = false;
     let redirecting = false;
@@ -428,7 +434,6 @@
       if (!btn) return;
       btn.style.display = loggedIn ? "inline-block" : "none";
     }
-
 
     async function getJson(url) {
       const resp = await fetch(url, { credentials: "include" });
@@ -483,7 +488,6 @@
       }
     }
 
-
     function hideConnectBtn() {
       const btn = document.getElementById("connectKrakenBtn");
       if (btn) btn.style.display = "none";
@@ -512,10 +516,8 @@
           return;
         }
       } catch {
-        // ignore and try balance fallback
       }
 
-      // Fallback: if balance works, you are effectively connected
       try {
         const d = await getJson(apiUrl("/balance"));
         const usd = Number(d?.balance?.ZUSD);
@@ -523,14 +525,11 @@
           hideConnectBtn();
           return;
         }
-      } catch (e) {
-        console.error("Analyze failed for pair", p, e);
+      } catch {
       }
-
 
       showConnectBtn();
     }
-
 
     async function doLogout() {
       loggedOut = true;
@@ -634,191 +633,312 @@
       return hour >= 5 && hour < 9;
     }
 
-    function buildUserExplanation(ctx) {
-      const parts = [];
+    function ema(values, period) {
+      if (!Array.isArray(values) || values.length < period) return null;
+      const k = 2 / (period + 1);
 
-      parts.push("You are viewing a " + (isTradeWindow() ? "valid trading time window" : "non trading time window") + ". " + nextTradeWindowText() + ".");
-
-      parts.push("Momentum estimate is " + Number(ctx.pred).toFixed(2) + " percent over the next few hours based on your simple trend forecast.");
-      parts.push("RSI is " + Number(ctx.rsi).toFixed(1) + ". Around 50 is neutral. Below 30 is oversold. Above 70 is overbought.");
-
-      if (ctx.uptrend) parts.push("Trend slope is positive, meaning price has been rising recently.");
-      if (ctx.downtrend) parts.push("Trend slope is negative, meaning price has been falling recently.");
-
-      if (ctx.rsiRising) parts.push("RSI has been improving recently, which can signal buyers returning.");
-      else parts.push("RSI is not clearly improving yet, so rebounds are less reliable.");
-
-      if (ctx.priceUp) parts.push("Price is currently pushing higher versus earlier candles.");
-      else parts.push("Price is not pushing higher yet, so breakouts are not confirmed.");
-
-      return parts.join(" ");
+      let e = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
+      for (let i = period; i < values.length; i++) {
+        e = values[i] * k + e * (1 - k);
+      }
+      return e;
     }
 
-    function buildNextSteps(ctx) {
-      const tips = [];
+    function emaSeries(values, period) {
+      if (!Array.isArray(values) || values.length === 0) return [];
+      const out = new Array(values.length).fill(null);
+      if (values.length < period) return out;
 
-      if (!isTradeWindow()) {
-        tips.push("Wait for the trade window 5 AM to 9 AM California time.");
-        return tips.join(" ");
+      const k = 2 / (period + 1);
+
+      let sum = 0;
+      for (let i = 0; i < period; i++) sum += values[i];
+      let e = sum / period;
+
+      out[period - 1] = e;
+
+      for (let i = period; i < values.length; i++) {
+        e = values[i] * k + e * (1 - k);
+        out[i] = e;
       }
 
-      if (ctx.pred < 3) tips.push("Forecast is weak. Wait for forecast change to reach 3 percent or more.");
-      if (ctx.downtrend) tips.push("Trend is still down. Wait for trend slope to turn positive or flatten out.");
-      if (!ctx.priceUp) tips.push("No breakout yet. Wait for price to start making higher closes.");
-      if (!ctx.rsiRising) tips.push("RSI is not improving. Wait for RSI to start rising for at least a few candles.");
-
-      if (ctx.rsi > 70) tips.push("RSI is high. If you buy here, you risk buying the top. Prefer waiting for a pullback or a confirmed breakout.");
-      if (ctx.rsi < 30) tips.push("RSI is oversold. A rebound is possible, but wait for RSI to turn upward to reduce false entries.");
-
-      if (!tips.length) tips.push("Conditions are close. Wait for one more candle confirmation.");
-
-      return tips.join(" ");
+      return out;
     }
 
+    function vwapFromCandles(candles) {
+      if (!Array.isArray(candles) || !candles.length) return null;
 
+      let pv = 0;
+      let vol = 0;
+
+      for (const c of candles) {
+        const high = Number(c.high);
+        const low = Number(c.low);
+        const close = Number(c.close);
+        const volume = Number(c.volume);
+
+        const tp = (high + low + close) / 3;
+        pv += tp * volume;
+        vol += volume;
+      }
+
+      if (vol <= 0) return null;
+      return pv / vol;
+    }
+
+    function approxPullbackSwingLow(closes, lookbackBars) {
+      const n = Math.max(3, Number(lookbackBars || 10));
+      if (!Array.isArray(closes) || closes.length < n) return null;
+      let m = Infinity;
+      for (let i = closes.length - n; i < closes.length; i++) {
+        m = Math.min(m, closes[i]);
+      }
+      return Number.isFinite(m) ? m : null;
+    }
+
+    function approxPullbackSwingHigh(closes, lookbackBars) {
+      const n = Math.max(3, Number(lookbackBars || 10));
+      if (!Array.isArray(closes) || closes.length < n) return null;
+      let m = -Infinity;
+      for (let i = closes.length - n; i < closes.length; i++) {
+        m = Math.max(m, closes[i]);
+      }
+      return Number.isFinite(m) ? m : null;
+    }
 
     function decideStrategyOrder(res, currentPrice, aggressive) {
-      const rsi = Number(res.rsi);
-      const pred = Number(res.predChange);
-      const slope = Number(res.slope || 0);
+      const h1 = res.h1 || [];
+      const h4 = res.h4 || [];
+      const m5 = res.m5 || [];
 
-      const rsiSeries = Array.isArray(res.rsiHist) ? res.rsiHist : [];
-      const rsiNow = rsiSeries.length ? rsiSeries[rsiSeries.length - 1] : rsi;
-      const rsiPrev = rsiSeries.length >= 4 ? rsiSeries[rsiSeries.length - 4] : rsiNow;
-      const rsiRising = (rsiNow - rsiPrev) > 2.0;
+      const h1Closes = h1.map(x => x.close);
+      const h4Closes = h4.map(x => x.close);
+      const m5Closes = m5.map(x => x.close);
 
-      const priceSeries = Array.isArray(res.prices) ? res.prices : [];
-      const priceNow = priceSeries.length ? priceSeries[priceSeries.length - 1] : currentPrice;
-      const pricePrev = priceSeries.length >= 4 ? priceSeries[priceSeries.length - 4] : priceNow;
-      const priceUp = priceNow > pricePrev;
-
-      const strongForecast = pred >= 5;
-      const decentForecast = pred >= 3;
-
-      const uptrend = slope > 0;
-      const downtrend = slope < 0;
-
-      const ctx = { rsi, pred, slope, uptrend, downtrend, rsiRising, priceUp };
-
-      const why = buildUserExplanation(ctx);
-      const nextSteps = buildNextSteps(ctx);
-
-      if (!isTradeWindow()) {
+      if (h1Closes.length < 220 || h4Closes.length < 220 || m5Closes.length < 60) {
         return {
-          tag: "Outside trade window",
-          actionTitle: "High potential but not safe timing",
-          details:
-            "This coin shows strong upside potential, but your strategy only trades between 5 AM and 9 AM California time. " +
-            "Outside this window, false breakouts and low liquidity are more common. " + why,
+          tag: "Not enough data",
+          actionTitle: "No trade right now",
+          details: "Not enough candles to calculate EMA 200 trend and 5 minute pullback rules.",
           side: null,
           orderType: null,
           price: null,
           quality: 0,
-          explain: why,
-          next: nextSteps
+          explain: "Need more candles",
+          next: "Wait for more market data to load."
         };
       }
 
-      if (rsi > 72 && pred < 0) {
+      const ema200H1 = ema(h1Closes, 200);
+      const ema200H4 = ema(h4Closes, 200);
+
+      const lastH1 = h1Closes[h1Closes.length - 1];
+      const lastH4 = h4Closes[h4Closes.length - 1];
+
+      const upBias = lastH1 > ema200H1 && lastH4 > ema200H4;
+      const downBias = lastH1 < ema200H1 && lastH4 < ema200H4;
+
+      const m5Ema20Series = emaSeries(m5Closes, 20);
+      const m5Ema20 = m5Ema20Series[m5Ema20Series.length - 1];
+      const m5Vwap = vwapFromCandles(m5);
+
+      const explainBase =
+        "Higher timeframe trend uses EMA 200 on 1 hour and 4 hour. " +
+        "Entry uses 5 minute pullback to EMA 20 or VWAP, then a reclaim candle. " +
+        "Stop goes beyond the pullback swing point, so the trade is invalidated cleanly.";
+
+      if (!upBias && !downBias) {
         return {
-          tag: "Overbought exit",
-          actionTitle: "Sell to protect gains",
+          tag: "Chop zone",
+          actionTitle: "No trade right now",
           details:
-            "RSI is very high and the forecast has turned negative. This often signals momentum exhaustion. " + why,
-          side: "sell",
-          orderType: "limit",
-          price: currentPrice,
-          quality: 70,
-          explain: why,
-          next: nextSteps
+            "Price is too close to EMA 200 on 1 hour or 4 hour, so direction is unclear. " +
+            "This is where fake moves happen. " + explainBase,
+          side: null,
+          orderType: null,
+          price: null,
+          quality: 0,
+          explain: explainBase,
+          next: "Wait until both 1 hour and 4 hour are clearly above or below EMA 200."
         };
       }
 
-      if (rsi <= 28 && strongForecast && rsiRising) {
-        return {
-          tag: "Oversold entry",
-          actionTitle: "Buy after weakness",
-          details:
-            "RSI is deeply oversold, the forecast is strong, and RSI has started turning upward. This is a rebound setup with defined risk. " +
-            why,
-          side: "buy",
-          orderType: "limit",
-          price: currentPrice,
-          quality: 80,
-          explain: why,
-          next: nextSteps
-        };
+      function isReclaimLongAt(i) {
+        const emaNow = m5Ema20Series[i];
+        const emaPrev = m5Ema20Series[i - 1];
+        if (!Number.isFinite(emaNow) || !Number.isFinite(emaPrev) || !Number.isFinite(m5Vwap)) return false;
+
+        const cNow = m5Closes[i];
+        const cPrev = m5Closes[i - 1];
+
+        const prevBelow = (cPrev <= emaPrev) || (cPrev <= m5Vwap);
+        const nowAbove = (cNow > emaNow) && (cNow > m5Vwap);
+        return prevBelow && nowAbove;
       }
 
-      if (rsi >= 44 && rsi <= 58 && strongForecast && uptrend && priceUp) {
-        const trigger = currentPrice * 1.01;
-        const limit = trigger * 1.003;
-        return {
-          tag: "Momentum breakout",
-          actionTitle: "Buy on breakout confirmation",
-          details:
-            "Trend is already up, forecast is strong, and price is starting to push higher. The strategy waits for a small breakout confirmation before entering. " +
-            why,
-          side: "buy",
-          orderType: "stop-loss-limit",
-          price: trigger,
-          price2: limit,
-          quality: 90,
-          explain: why,
-          next: nextSteps
-        };
+      function isReclaimShortAt(i) {
+        const emaNow = m5Ema20Series[i];
+        const emaPrev = m5Ema20Series[i - 1];
+        if (!Number.isFinite(emaNow) || !Number.isFinite(emaPrev) || !Number.isFinite(m5Vwap)) return false;
+
+        const cNow = m5Closes[i];
+        const cPrev = m5Closes[i - 1];
+
+        const prevAbove = (cPrev >= emaPrev) || (cPrev >= m5Vwap);
+        const nowBelow = (cNow < emaNow) && (cNow < m5Vwap);
+        return prevAbove && nowBelow;
       }
 
-      if (rsi <= 35 && decentForecast && rsiRising && !downtrend) {
-        return {
-          tag: "Cautious rebound",
-          actionTitle: "Buy only if rebound forms",
-          details:
-            "RSI is low and improving, the forecast is decent, and the trend is not sharply down. This is a lower confidence rebound setup. " +
-            why,
-          side: "buy",
-          orderType: "limit",
-          price: currentPrice,
-          quality: 65,
-          explain: why,
-          next: nextSteps
-        };
+      let reclaimBarsAgo = null;
+      const lastIdx = m5Closes.length - 1;
+
+      for (let i = lastIdx; i >= Math.max(1, lastIdx - 2); i--) {
+        if (upBias && isReclaimLongAt(i)) { reclaimBarsAgo = lastIdx - i; break; }
+        if (downBias && isReclaimShortAt(i)) { reclaimBarsAgo = lastIdx - i; break; }
       }
 
-      if (aggressive === true) {
-        const aggressiveOk = pred >= 3 && uptrend && rsi >= 58 && rsi <= 68;
-        if (aggressiveOk) {
+      const isFreshSetup = reclaimBarsAgo !== null && reclaimBarsAgo <= 2;
+      const reclaimLong = upBias && reclaimBarsAgo !== null;
+      const reclaimShort = downBias && reclaimBarsAgo !== null;
+
+      if (upBias) {
+        if (!reclaimLong) {
           return {
-            tag: "Aggressive continuation",
-            actionTitle: "Buy strong momentum",
+            tag: "Waiting for pullback reclaim",
+            actionTitle: "No trade yet",
             details:
-              "Aggressive Mode is enabled. This buys into a strong trend even when RSI is elevated. Higher upside potential, but higher risk of buying the top. " +
-              why,
-            side: "buy",
-            orderType: "limit",
-            price: currentPrice,
-            quality: 60,
-            explain: why,
-            next: nextSteps
+              "Trend bias is up, but the 5 minute chart has not reclaimed EMA 20 and VWAP after a pullback. " +
+              "Entering early is how you buy the falling knife. " + explainBase,
+            side: null,
+            orderType: null,
+            price: null,
+            quality: 0,
+            explain: explainBase,
+            next: "Wait for a 5 minute close back above EMA 20 and VWAP after price pulled into that area."
           };
         }
+
+        if (!isFreshSetup) {
+          return {
+            tag: "Setup too old",
+            actionTitle: "No trade right now",
+            details:
+              "Trend is up, but the reclaim happened too long ago. Your safest list only shows fresh reclaim setups. " +
+              explainBase,
+            side: null,
+            orderType: null,
+            price: null,
+            quality: 0,
+            explain: explainBase,
+            next: "Wait for a new reclaim after a pullback, not a late entry."
+          };
+        }
+
+        const entry = currentPrice;
+        const swingLow = approxPullbackSwingLow(m5Closes, 12);
+        const stop = swingLow ? (swingLow * 0.999) : (entry * 0.992);
+        const r = entry - stop;
+        const tp = entry + (r * (aggressive ? 1.5 : 2.0));
+
+        let q = aggressive ? 75 : 85;
+        if (reclaimBarsAgo === 1) q -= 8;
+        if (reclaimBarsAgo === 2) q -= 15;
+
+        return {
+          tag: "Trend pullback reclaim",
+          actionTitle: "Buy after pullback confirms",
+          details:
+            "Both 1 hour and 4 hour trends are above EMA 200. Price pulled back on 5 minute and reclaimed EMA 20 and VWAP. " +
+            "That is a momentum entry with a clear invalidation point. " + explainBase,
+          side: "buy",
+          orderType: "limit",
+          price: entry,
+          quality: q,
+          explain: explainBase,
+          next:
+            "Stop is placed beyond the pullback swing low. Take profit is based on your risk distance, not a random percent.",
+          stopLoss: stop,
+          takeProfit: tp,
+          fresh: true,
+          freshBarsAgo: reclaimBarsAgo
+        };
+      }
+
+      if (downBias) {
+        if (!reclaimShort) {
+          return {
+            tag: "Waiting for pullback reclaim",
+            actionTitle: "No trade yet",
+            details:
+              "Trend bias is down, but the 5 minute chart has not reclaimed EMA 20 and VWAP downward after a pullback. " +
+              "Chasing without confirmation is how shorts get trapped. " + explainBase,
+            side: null,
+            orderType: null,
+            price: null,
+            quality: 0,
+            explain: explainBase,
+            next: "Wait for a 5 minute close back below EMA 20 and VWAP after price bounced into that area."
+          };
+        }
+
+        if (!isFreshSetup) {
+          return {
+            tag: "Setup too old",
+            actionTitle: "No trade right now",
+            details:
+              "Trend is down, but the reclaim happened too long ago. Your safest list only shows fresh reclaim setups. " +
+              explainBase,
+            side: null,
+            orderType: null,
+            price: null,
+            quality: 0,
+            explain: explainBase,
+            next: "Wait for a new reclaim after a pullback, not a late entry."
+          };
+        }
+
+        const entry = currentPrice;
+        const swingHigh = approxPullbackSwingHigh(m5Closes, 12);
+        const stop = swingHigh ? (swingHigh * 1.001) : (entry * 1.008);
+        const r = stop - entry;
+        const tp = entry - (r * (aggressive ? 1.5 : 2.0));
+
+        let q = aggressive ? 70 : 82;
+        if (reclaimBarsAgo === 1) q -= 8;
+        if (reclaimBarsAgo === 2) q -= 15;
+
+        return {
+          tag: "Trend pullback reclaim",
+          actionTitle: "Sell after pullback confirms",
+          details:
+            "Both 1 hour and 4 hour trends are below EMA 200. Price pulled back on 5 minute and reclaimed EMA 20 and VWAP downward. " +
+            "That is a continuation entry with defined risk. " + explainBase,
+          side: "sell",
+          orderType: "limit",
+          price: entry,
+          quality: q,
+          explain: explainBase,
+          next:
+            "Stop is placed beyond the pullback swing high. Take profit is based on your risk distance, not a random percent.",
+          stopLoss: stop,
+          takeProfit: tp,
+          fresh: true,
+          freshBarsAgo: reclaimBarsAgo
+        };
       }
 
       return {
         tag: "No setup",
         actionTitle: "No trade right now",
-        details:
-          "The coin may look bullish, but conditions do not align for a safe entry according to your strategy. " + why,
+        details: "No clean trend plus pullback reclaim setup right now. " + explainBase,
         side: null,
         orderType: null,
         price: null,
         quality: 0,
-        explain: why,
-        next: nextSteps
+        explain: explainBase,
+        next: "Wait for clearer trend alignment and a reclaim candle."
       };
     }
-
-
 
     function openModal() { modalEl.style.display = "block"; }
     function closeModal() { modalEl.style.display = "none"; }
@@ -885,15 +1005,19 @@
       return scores.slice(0, topN).map(x => x.pair);
     }
 
-    async function fetchOHLC(pair) {
-      const r = await fetch("https://api.kraken.com/0/public/OHLC?pair=" + encodeURIComponent(pair) + "&interval=" + OHLC_INTERVAL_MIN);
+    async function fetchOHLC(pair, intervalMin, candles) {
+      const r = await fetch("https://api.kraken.com/0/public/OHLC?pair=" + encodeURIComponent(pair) + "&interval=" + intervalMin);
       const j = await r.json();
       const k = Object.keys(j.result || {}).find(x => x !== "last");
       if (!k || !Array.isArray(j.result[k])) return [];
 
-      return j.result[k].slice(-OHLC_CANDLES).map(x => ({
-        time: new Date(x[0] * 1000).toLocaleTimeString([], { hour: "numeric" }),
-        close: Number(x[4])
+      return j.result[k].slice(-(candles || 60)).map(x => ({
+        time: new Date(x[0] * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+        open: Number(x[1]),
+        high: Number(x[2]),
+        low: Number(x[3]),
+        close: Number(x[4]),
+        volume: Number(x[6])
       }));
     }
 
@@ -1057,7 +1181,6 @@
       const chartBuilt = buildModalChart(res);
       const rec = decideStrategyOrder(res, chartBuilt.entry, AGGRESSIVE_MODE);
 
-
       modalTitleEl.textContent = prettyPair(res.pair) + " " + res.signal;
 
       const recLine = rec
@@ -1071,7 +1194,6 @@
       const nextLine = rec && rec.next
         ? ("<div class='profitBox' style='margin-top:12px;'><div class='muted'>What to watch next</div><div style='margin-top:6px; font-weight:bold;'>" + rec.next + "</div></div>")
         : "";
-
 
       modalContentEl.innerHTML =
         "<div class='profitBox'>" +
@@ -1143,9 +1265,14 @@
             const priceTxt = rec ? Number(rec.price).toFixed(6) : "0";
             const price2Txt = (rec && rec.price2 !== undefined && rec.price2 !== null) ? Number(rec.price2).toFixed(6) : "";
 
+            const freshTxt = (rec && rec.fresh === true)
+              ? ("Fresh reclaim " + String(rec.freshBarsAgo) + " bars ago")
+              : "Not fresh";
+
             orderPreviewBox.innerHTML =
               "<div class='muted'>Mode</div><div style='font-weight:bold;'>" + modeTxt + "</div>" +
               "<div class='muted' style='margin-top:8px;'>Side and type</div><div style='font-weight:bold;'>" + sideTxt + " " + typeTxt + "</div>" +
+              "<div class='muted' style='margin-top:8px;'>Freshness</div><div class='muted' style='font-weight:bold;'>" + freshTxt + "</div>" +
               "<div class='muted' style='margin-top:8px;'>Buy amount</div><div class='warn' style='font-weight:bold; font-size:16px;'>" + est.invest.toFixed(2) + " USD</div>" +
               "<div class='muted' style='margin-top:8px;'>Estimated quantity</div><div class='muted' style='font-weight:bold;'>" + est.qty.toFixed(6) + "</div>" +
               "<div class='muted' style='margin-top:8px;'>Entry trigger</div><div class='good' style='font-weight:bold;'>" + priceTxt + "</div>" +
@@ -1165,7 +1292,7 @@
             "<div class='muted' style='margin-top:8px;'>Estimated profit at TP</div><div class='good' style='font-weight:bold; font-size:16px;'>" + est.estProfit.toFixed(4) + " USD</div>" +
             "<div class='muted' style='margin-top:8px;'>Estimated loss at SL</div><div class='bad' style='font-weight:bold; font-size:16px;'>" + est.estLoss.toFixed(4) + " USD</div>" +
             "<div class='muted' style='margin-top:6px;'>Estimates ignore fees and slippage.</div>" +
-            (tooSmall ? "<div class='bad' style='margin-top:10px; font-weight:bold;'>Buy amount is below Kraken minimum. Increase to at least " + minUsd.toFixed(2) + " USD.</div>" : "");
+            (tooSmall ? "<div class='bad' style='margin-top:10px; font-weight:bold;'>Buy amount is below minimum. Increase to at least " + minUsd.toFixed(2) + " USD.</div>" : "");
 
           if (approveBtn) {
             approveBtn.disabled = (!rec) || tooSmall || (est.invest <= 0) || overBalance;
@@ -1199,7 +1326,7 @@
 
             const minUsd = calcMinUsd(pairInfo, chartBuilt.entry);
             if (minUsd > 0 && invest < minUsd) {
-              alert("Kraken minimum for this pair is " + minUsd.toFixed(2) + " USD. Increase buy amount.");
+              alert("Minimum for this pair is " + minUsd.toFixed(2) + " USD. Increase buy amount.");
               approveBtn.disabled = false;
               approveBtn.textContent = "✅ Approve Strategy";
               return;
@@ -1242,10 +1369,14 @@
 
       for (const p of pairs) {
         try {
-          const d = await fetchOHLC(p);
-          if (d.length < RSI_PERIOD + 1) continue;
+          const h1 = await fetchOHLC(p, H1_INTERVAL_MIN, H1_CANDLES);
+          const h4 = await fetchOHLC(p, H4_INTERVAL_MIN, H4_CANDLES);
+          const m5 = await fetchOHLC(p, M5_INTERVAL_MIN, M5_CANDLES);
 
-          const closes = d.map(x => x.close);
+          if (h1.length < RSI_PERIOD + 1) continue;
+          if (h1.length < 220 || h4.length < 220 || m5.length < 60) continue;
+
+          const closes = h1.map(x => x.close);
           const rsi = calculateRSI_Wilder(closes, RSI_PERIOD);
 
           const x = closes.map((_, i) => i + 1);
@@ -1256,8 +1387,8 @@
 
           const rowObj = {
             pair: p,
-            chartData: d,
-            data: d.slice(-10),
+            chartData: h1,
+            data: h1.slice(-10),
             last: closes[closes.length - 1],
             rsi,
             predChange,
@@ -1265,7 +1396,10 @@
             signal: (rsi > 60 && predChange > 3) ? "🚀 Strong Buy" : "⏸ Neutral",
             slope: lr.m,
             prices: closes,
-            rsiHist: closes.map((_, i) => calculateRSI_Wilder(closes.slice(0, i + 1), RSI_PERIOD))
+            rsiHist: closes.map((_, i) => calculateRSI_Wilder(closes.slice(0, i + 1), RSI_PERIOD)),
+            h1,
+            h4,
+            m5
           };
 
           rowObj.recommended = decideStrategyOrder(rowObj, rowObj.last, AGGRESSIVE_MODE);
@@ -1274,7 +1408,6 @@
         } catch (e) {
           console.error("Analyze failed for pair", p, e);
         }
-
       }
 
       const top10 = results
@@ -1301,7 +1434,14 @@
       }
 
       const safeTrades = results
-        .filter(r => r.recommended && (r.recommended.quality || 0) >= 80)
+        .filter(r => {
+          const rec = r.recommended;
+          if (!rec) return false;
+          if ((rec.quality || 0) < 80) return false;
+          if (rec.side !== "buy" && rec.side !== "sell") return false;
+          if (rec.fresh !== true) return false;
+          return true;
+        })
         .sort((a, b) => (b.recommended.quality || 0) - (a.recommended.quality || 0))
         .slice(0, 3);
 
@@ -1310,7 +1450,7 @@
       safeListEl.innerHTML = "";
 
       if (!safeTrades.length) {
-        safeListEl.innerHTML = "<div class='muted'>No strategy approved entries right now.</div>";
+        safeListEl.innerHTML = "<div class='muted'>No fresh reclaim setups right now.</div>";
         return;
       }
 
@@ -1320,11 +1460,15 @@
 
         const tag = r.recommended.tag;
         const action = r.recommended.actionTitle;
+        const barsAgo = (r.recommended && r.recommended.freshBarsAgo !== null && r.recommended.freshBarsAgo !== undefined)
+          ? ("Fresh " + String(r.recommended.freshBarsAgo) + " bars ago")
+          : "Fresh";
 
         item.innerHTML =
           "<span style='min-width:160px; font-weight:bold;'>" + prettyPair(r.pair) + "</span>" +
           "<span class='muted' style='flex:1 1 auto;'>" + action + "</span>" +
           "<span class='safeTag'>" + tag + "</span>" +
+          "<span class='safeTag'>" + barsAgo + "</span>" +
           "<span class='safeBadge'>Q " + (r.recommended.quality || 0) + "</span>";
 
         item.addEventListener("click", () => showStrategyModal(r));
@@ -1343,7 +1487,6 @@
       setAggressiveUi();
       analyze();
     });
-
 
     (async () => {
       setAggressiveUi();

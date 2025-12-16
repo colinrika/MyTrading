@@ -9,50 +9,20 @@ import sqlite3 from "sqlite3";
 import bcrypt from "bcrypt";
 import cookieParser from "cookie-parser";
 import jwt from "jsonwebtoken";
-//import dotenv from "dotenv";
-
-
-
-
-
-
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-
 dotenv.config();
-console.log("cwd", process.cwd());
-console.log("token present", !!process.env.TELEGRAM_BOT_TOKEN);
-console.log("chat present", !!process.env.TELEGRAM_CHAT_ID);
-
 
 const app = express();
+
 app.use(cors({ origin: true, credentials: true }));
-
-app.use(express.static(__dirname));
-
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "dashboard.html"));
-});
-
-app.get("/trades.html", (req, res) => {
-  res.sendFile(path.join(__dirname, "trades.html"));
-});
-
-app.use("/api", express.json());
-app.use("/trade", express.json());
-
-
-// put all your API routes after this
-// app.get("/balance", ...)
-// app.post("/trade", ...)
-// app.get("/trades", ...)
-// app.post("/api/alerts/safest", ...)
-
-
-
+app.use(express.json());
 app.use(cookieParser());
+
+function nowMs() { return Date.now(); }
+function nowIso() { return new Date().toISOString(); }
 
 const SIMULATOR_MODE = String(process.env.SIMULATOR_MODE || "false").toLowerCase() === "true";
 
@@ -61,7 +31,7 @@ const ENC_KEY_B64 = process.env.ENC_KEY_BASE64 || "";
 const ENC_KEY = ENC_KEY_B64 ? Buffer.from(ENC_KEY_B64, "base64") : null;
 
 if (!APP_SECRET) {
-  console.error("Missing APP_SECRET in .env");
+  console.error("Missing APP_SECRET in env");
   process.exit(1);
 }
 if (!ENC_KEY || ENC_KEY.length !== 32) {
@@ -80,6 +50,7 @@ function dbRun(sql, params = []) {
     });
   });
 }
+
 function dbGet(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.get(sql, params, (err, row) => {
@@ -88,9 +59,6 @@ function dbGet(sql, params = []) {
     });
   });
 }
-
-function nowMs() { return Date.now(); }
-function nowIso() { return new Date().toISOString(); }
 
 async function initDb() {
   await dbRun(`
@@ -118,6 +86,7 @@ async function initDb() {
     );
   `);
 }
+
 await initDb();
 
 function makeVerifyCode() {
@@ -164,11 +133,6 @@ async function getUserKrakenClient(uid) {
   if (!row) return null;
   const secret = decryptText(row.api_secret_enc);
   return new KrakenClient(row.api_key, secret);
-}
-
-function safeStr(v) {
-  if (v === null || v === undefined) return "";
-  return String(v);
 }
 
 function numOrNull(v) {
@@ -279,8 +243,14 @@ async function queryOrder(krakenClient, txid) {
   return order || null;
 }
 
+/* Trades log in memory */
 const tradeLog = [];
 let tradeIdSeq = 1;
+
+function safeStr(v) {
+  if (v === null || v === undefined) return "";
+  return String(v);
+}
 
 function logTrade(entry) {
   const item = {
@@ -308,10 +278,22 @@ function logTrade(entry) {
   return item;
 }
 
+/* Telegram alerts */
+const ALERT_COOLDOWN_MS = 10 * 60 * 1000;
+const lastSafeAlertByUser = new Map();
+
+function telegramConfigured() {
+  const enabled = String(process.env.TELEGRAM_ENABLED || "").toLowerCase() === "true";
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  return enabled && !!token && !!chatId;
+}
+
 async function sendTelegram(text) {
-  const token = process.env.TELEGRAM_BOT_TOKEN || "";
-  const chatId = process.env.TELEGRAM_CHAT_ID || "";
-  if (!token || !chatId) throw new Error("Missing TELEGRAM env values");
+  if (!telegramConfigured()) throw new Error("Missing TELEGRAM env values");
+
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
 
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
   const resp = await fetch(url, {
@@ -325,11 +307,15 @@ async function sendTelegram(text) {
   });
 
   const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error(data?.description || "Telegram send failed");
+  if (!resp.ok || data.ok !== true) {
+    throw new Error(data?.description || `Telegram send failed ${resp.status}`);
+  }
   return data;
 }
 
-const lastSafeAlertByUser = new Map();
+function prettyPair(pair) {
+  return String(pair || "").replace("X", "").replace("ZUSD", "/USD");
+}
 
 function safeTradesSignature(safeTrades) {
   return safeTrades
@@ -338,41 +324,71 @@ function safeTradesSignature(safeTrades) {
       const pair = String(t.pair || "");
       const tag = String(t.recommended?.tag || "");
       const q = Number(t.recommended?.quality || 0);
-      return pair + "|" + tag + "|" + q;
+      const side = String(t.recommended?.side || "");
+      const entry = Number(t.recommended?.price ?? t.last ?? 0).toFixed(6);
+      return pair + "|" + tag + "|" + q + "|" + side + "|" + entry;
     })
     .join(";");
 }
 
-async function alertSafestTradesTelegram(safeTrades) {
-  if (!Array.isArray(safeTrades) || safeTrades.length === 0) return;
+function buildTelegramMessage(safeTrades) {
+  const now = new Date().toLocaleString();
+  let msg = `Namu safest trades ${now}\n\n`;
 
-  const lines = safeTrades.slice(0, 3).map(t => {
-    const pair = String(t.pair || "");
-    const tag = String(t.recommended?.tag || "");
-    const q = Number(t.recommended?.quality || 0);
-    const forecast = Number(t.predChange || 0).toFixed(2);
-    const rsi = Number(t.rsi || 0).toFixed(1);
-    return `${pair}  ${tag}  Q${q}  Forecast ${forecast} percent  RSI ${rsi}`;
-  });
+  for (const t of safeTrades.slice(0, 3)) {
+    const rec = t.recommended || {};
+    const side = String(rec.side || "").toUpperCase();
+    const entry = Number(rec.price ?? t.last ?? 0);
+    const tp = rec.takeProfit ?? null;
+    const sl = rec.stopLoss ?? null;
 
-  const msg = "Safest trades detected\n" + lines.join("\n");
-  await sendTelegram(msg);
+    msg += `${prettyPair(t.pair)}\n`;
+    msg += `Signal ${side}  Quality ${Number(rec.quality || 0)}\n`;
+    msg += `Entry ${entry.toFixed(6)}\n`;
+    if (tp !== null) msg += `TP ${Number(tp).toFixed(6)}\n`;
+    if (sl !== null) msg += `SL ${Number(sl).toFixed(6)}\n`;
+    if (rec.actionTitle) msg += `${rec.actionTitle}\n`;
+    if (rec.tag) msg += `Tag ${rec.tag}\n`;
+    msg += `\n`;
+  }
+
+  msg += `Generated by your strategy rules.\n`;
+  return msg;
 }
 
+/* Pages that must be protected */
+app.get("/dashboard.html", authRequired, (req, res) => res.sendFile(path.join(__dirname, "dashboard.html")));
+app.get("/account.html", authRequired, (req, res) => res.sendFile(path.join(__dirname, "account.html")));
+app.get("/connect-kraken.html", authRequired, (req, res) => res.sendFile(path.join(__dirname, "connect-kraken.html")));
 
-
-app.use(express.static(__dirname));
-
+/* Public pages */
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "login.html")));
-app.get("/register", (req, res) => res.sendFile(path.join(__dirname, "register.html")));
-app.get("/verify", (req, res) => res.sendFile(path.join(__dirname, "verify.html")));
-app.get("/connect", (req, res) => res.sendFile(path.join(__dirname, "connect.html")));
-app.get("/dashboard", (req, res) => res.sendFile(path.join(__dirname, "dashboard.html")));
+app.get("/login.html", (req, res) => res.sendFile(path.join(__dirname, "login.html")));
+app.get("/register.html", (req, res) => res.sendFile(path.join(__dirname, "register.html")));
+app.get("/verify.html", (req, res) => res.sendFile(path.join(__dirname, "verify.html")));
 
-app.get("/mode", (req, res) => {
-  res.json({ simulator: SIMULATOR_MODE });
+app.get("/dashboard", authRequired, (req, res) => {
+  res.sendFile(path.join(__dirname, "dashboard.html"));
 });
 
+app.get("/account", authRequired, (req, res) => {
+  res.sendFile(path.join(__dirname, "account.html"));
+});
+
+app.get("/connect", authRequired, (req, res) => {
+  res.sendFile(path.join(__dirname, "connect-kraken.html"));
+});
+
+/* Static assets after protected routes */
+app.use(express.static(__dirname));
+
+/* Health */
+app.get("/healthz", (req, res) => res.json({ ok: true }));
+
+/* Mode */
+app.get("/mode", (req, res) => res.json({ simulator: SIMULATOR_MODE }));
+
+/* Auth */
 app.post("/api/register", async (req, res) => {
   try {
     const name = String(req.body?.name || "").trim();
@@ -438,7 +454,11 @@ app.post("/api/login", async (req, res) => {
     if (!ok) return res.status(400).json({ error: "Invalid login" });
 
     const token = signToken(user);
-    res.cookie("session", token, { httpOnly: true, sameSite: "lax" });
+    res.cookie("session", token, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: String(process.env.NODE_ENV || "").toLowerCase() === "production"
+    });
 
     const keys = await dbGet(`SELECT user_id FROM kraken_keys WHERE user_id = ?`, [user.id]);
     return res.json({ ok: true, hasKraken: !!keys });
@@ -452,6 +472,7 @@ app.post("/api/logout", (req, res) => {
   res.json({ ok: true });
 });
 
+/* Kraken */
 app.post("/api/kraken/save", authRequired, async (req, res) => {
   try {
     const apiKey = String(req.body?.apiKey || "").trim();
@@ -491,32 +512,17 @@ app.get("/api/kraken/test", authRequired, async (req, res) => {
   }
 });
 
-app.post("/api/alerts/safest", authRequired, async (req, res) => {
+app.get("/api/account/status", authRequired, async (req, res) => {
   try {
-    const safeTrades = Array.isArray(req.body?.safeTrades) ? req.body.safeTrades : [];
-    const uid = String(req.user.uid);
+    const keys = await dbGet(`SELECT user_id FROM kraken_keys WHERE user_id = ?`, [req.user.uid]);
+    const user = await dbGet(`SELECT is_verified FROM users WHERE id = ?`, [req.user.uid]);
 
-    const prev = lastSafeAlertByUser.get(uid) || { hadAny: false, sig: "" };
-    const hasAny = safeTrades.length > 0;
-
-    if (!hasAny) {
-      lastSafeAlertByUser.set(uid, { hadAny: false, sig: "" });
-      return res.json({ ok: true, sent: false, reason: "empty" });
-    }
-
-    const sig = safeTradesSignature(safeTrades);
-
-    if (prev.hadAny && prev.sig === sig) {
-      return res.json({ ok: true, sent: false, reason: "already_sent_for_this_set" });
-    }
-
-    lastSafeAlertByUser.set(uid, { hadAny: true, sig });
-
-    await alertSafestTradesTelegram(safeTrades);
-
-    return res.json({ ok: true, sent: true });
+    res.json({
+      krakenConnected: !!keys,
+      emailVerified: Number(user?.is_verified || 0) === 1
+    });
   } catch (e) {
-    return res.status(500).json({ error: "Alert failed", details: String(e.message || e) });
+    res.status(500).json({ error: "Status failed", details: String(e.message || e) });
   }
 });
 
@@ -550,14 +556,14 @@ app.get("/balance", authRequired, async (req, res) => {
     const balance = await client.api("Balance");
     res.json({ status: "Connected", balance: balance.result });
   } catch (err) {
-    console.error("Balance check failed:", err);
     res.status(500).json({ error: "Failed to connect to Kraken", details: err.message });
   }
 });
 
+/* Trades list for account.html */
 app.get("/trades", authRequired, async (req, res) => {
   const page = Math.max(1, Number(req.query.page || 1));
-  const pageSize = Math.max(1, Math.min(100, Number(req.query.pageSize || 10)));
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit || req.query.pageSize || 10)));
   const q = String(req.query.q || "").trim().toLowerCase();
 
   let filtered = tradeLog.filter(t => String(t.userId) === String(req.user.uid));
@@ -568,22 +574,268 @@ app.get("/trades", authRequired, async (req, res) => {
     });
   }
 
-  const total = filtered.length;
-  const start = (page - 1) * pageSize;
-  const items = filtered.slice(start, start + pageSize);
+  // Price cache so you do not spam Kraken every refresh
+  const priceCache = new Map(); // pair -> { price, ts }
+  const PRICE_TTL_MS = 10 * 1000;
 
-  res.json({ page, pageSize, total, items });
-});
+  async function getLastPrices(pairs) {
+    const now = Date.now();
+    const out = {};
 
-app.get("/api/account/status", authRequired, async (req, res) => {
-  res.json({
-    krakenConnected: Boolean(req.user.krakenConnected),
-    emailVerified: Boolean(req.user.emailVerified),
-    phoneVerified: Boolean(req.user.phoneVerified)
+    const need = [];
+    for (const p of pairs) {
+      const hit = priceCache.get(p);
+      if (hit && (now - hit.ts) < PRICE_TTL_MS) out[p] = hit.price;
+      else need.push(p);
+    }
+
+    if (!need.length) return out;
+
+    const url = "https://api.kraken.com/0/public/Ticker?pair=" + encodeURIComponent(need.join(","));
+    const r = await fetch(url);
+    const j = await r.json().catch(() => ({}));
+    const result = j.result || {};
+
+    // Kraken may return canonical keys, so map best effort
+    for (const [k, v] of Object.entries(result)) {
+      const last = Number(v?.c?.[0]);
+      if (Number.isFinite(last)) {
+        priceCache.set(k, { price: last, ts: now });
+        out[k] = last;
+      }
+    }
+
+    // Also try to fill requested keys if they differ
+    for (const p of need) {
+      if (out[p] !== undefined) continue;
+      // attempt match by stripping slash, etc
+      const needle = String(p).replace("/", "");
+      const foundKey = Object.keys(out).find(x => String(x).replace("/", "") === needle);
+      if (foundKey) out[p] = out[foundKey];
+    }
+
+    return out;
+  }
+
+  // 1) Batch prices for account page
+  app.get("/api/prices", authRequired, async (req, res) => {
+    try {
+      const raw = String(req.query.pairs || "");
+      const pairs = raw.split(",").map(s => s.trim()).filter(Boolean);
+      if (!pairs.length) return res.json({ ok: true, prices: {} });
+
+      const prices = await getLastPrices(pairs);
+      return res.json({ ok: true, prices });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: String(e.message || e) });
+    }
   });
+
+  // 2) Live order status by txid
+  app.get("/api/order/status", authRequired, async (req, res) => {
+    try {
+      const txid = String(req.query.txid || "").trim();
+      if (!txid) return res.status(400).json({ ok: false, error: "txid required" });
+
+      const mine = tradeLog.find(t => String(t.userId) === String(req.user.uid) && String(t.txid) === txid);
+      if (!mine) return res.status(404).json({ ok: false, error: "Order not found" });
+
+      if (SIMULATOR_MODE) {
+        return res.json({
+          ok: true,
+          status: mine.status || "simulated",
+          vol_exec: "0.0",
+          price: mine.entryPrice ?? null
+        });
+      }
+
+      const client = await getUserKrakenClient(req.user.uid);
+      if (!client) return res.status(400).json({ ok: false, error: "No Kraken keys saved" });
+
+      const o = await queryOrder(client, txid);
+      if (!o) return res.json({ ok: true, status: "unknown" });
+
+      const status = String(o.status || "");
+      const vol_exec = String(o.vol_exec || "0");
+      const price = Number(o.price || 0);
+
+      // Keep your local log somewhat honest
+      if (status) mine.status = status;
+
+      return res.json({
+        ok: true,
+        status,
+        vol: String(o.vol || ""),
+        vol_exec,
+        price: Number.isFinite(price) ? price : null,
+        descr: o.descr || null
+      });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: String(e.message || e) });
+    }
+  });
+
+  // 3) Cancel an open order
+  app.post("/api/order/cancel", authRequired, async (req, res) => {
+    try {
+      const txid = String(req.body?.txid || "").trim();
+      if (!txid) return res.status(400).json({ ok: false, error: "txid required" });
+
+      const mine = tradeLog.find(t => String(t.userId) === String(req.user.uid) && String(t.txid) === txid);
+      if (!mine) return res.status(404).json({ ok: false, error: "Order not found" });
+
+      if (SIMULATOR_MODE) {
+        mine.status = "canceled";
+        return res.json({ ok: true, canceled: true, simulator: true });
+      }
+
+      const client = await getUserKrakenClient(req.user.uid);
+      if (!client) return res.status(400).json({ ok: false, error: "No Kraken keys saved" });
+
+      const resp = await client.api("CancelOrder", { txid });
+      const count = Number(resp?.result?.count || 0);
+
+      if (count > 0) mine.status = "canceled";
+
+      return res.json({ ok: true, canceled: count > 0, result: resp?.result || {} });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: String(e.message || e) });
+    }
+  });
+
+  // 4) Close immediately using a market order
+  app.post("/api/order/close", authRequired, async (req, res) => {
+    try {
+      const tradeId = Number(req.body?.tradeId || 0);
+      if (!tradeId) return res.status(400).json({ ok: false, error: "tradeId required" });
+
+      const mine = tradeLog.find(t => Number(t.id) === tradeId && String(t.userId) === String(req.user.uid));
+      if (!mine) return res.status(404).json({ ok: false, error: "Trade not found" });
+
+      const pair = String(mine.pair || "");
+      const volume = String(mine.volume || "");
+      const entrySide = String(mine.side || "").toLowerCase();
+
+      if (!pair || !volume || Number(volume) <= 0) {
+        return res.status(400).json({ ok: false, error: "Missing pair or volume on this trade" });
+      }
+
+      const closeSide = entrySide === "buy" ? "sell" : "buy";
+
+      if (SIMULATOR_MODE) {
+        mine.status = "closed_by_user";
+        logTrade({
+          pair,
+          side: closeSide,
+          orderType: "market",
+          investUsd: null,
+          volume,
+          entryPrice: null,
+          takeProfit: null,
+          stopLoss: null,
+          status: "simulated",
+          message: "Simulator close. No Kraken order was placed.",
+          txid: "SIM_CLOSE_" + Date.now(),
+          isAuto: false,
+          userId: req.user.uid
+        });
+
+        return res.json({ ok: true, closed: true, simulator: true });
+      }
+
+      const client = await getUserKrakenClient(req.user.uid);
+      if (!client) return res.status(400).json({ ok: false, error: "No Kraken keys saved" });
+
+      const closeParams = {
+        pair,
+        type: closeSide,
+        ordertype: "market",
+        volume
+      };
+
+      const resp = await client.api("AddOrder", closeParams);
+      const txid = Array.isArray(resp?.result?.txid) ? resp.result.txid[0] : "";
+
+      mine.status = "closed_by_user";
+
+      logTrade({
+        pair,
+        side: closeSide,
+        orderType: "market",
+        investUsd: null,
+        volume,
+        entryPrice: null,
+        takeProfit: null,
+        stopLoss: null,
+        status: "submitted",
+        message: "Close sent as market order",
+        txid,
+        isAuto: false,
+        userId: req.user.uid
+      });
+
+      return res.json({ ok: true, closed: true, txid });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: String(e.message || e) });
+    }
+  });
+
+
+  const total = filtered.length;
+  const start = (page - 1) * limit;
+  const items = filtered.slice(start, start + limit);
+
+  res.json({ page, limit, total, items });
 });
 
+/* Alerts endpoint called by dashboard */
+app.post("/api/alerts/safest", authRequired, async (req, res) => {
+  try {
+    const safeTrades = Array.isArray(req.body?.safeTrades) ? req.body.safeTrades : [];
+    const uid = String(req.user.uid);
 
+    if (!safeTrades.length) {
+      lastSafeAlertByUser.set(uid, { sig: "", ts: 0 });
+      return res.json({ ok: true, sent: false, reason: "empty" });
+    }
+
+    if (!telegramConfigured()) {
+      return res.json({ ok: false, sent: false, error: "Missing TELEGRAM env values" });
+    }
+
+    const sig = safeTradesSignature(safeTrades);
+    const prev = lastSafeAlertByUser.get(uid) || { sig: "", ts: 0 };
+    const now = Date.now();
+
+    const same = prev.sig === sig;
+    const inCooldown = (now - prev.ts) < ALERT_COOLDOWN_MS;
+
+    if (same || inCooldown) {
+      return res.json({ ok: true, sent: false, reason: same ? "already_sent_for_this_set" : "cooldown" });
+    }
+
+    lastSafeAlertByUser.set(uid, { sig, ts: now });
+
+    const msg = buildTelegramMessage(safeTrades);
+    const tg = await sendTelegram(msg);
+
+    return res.json({ ok: true, sent: true, telegram: tg });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+/* Telegram test should be protected */
+app.get("/api/telegram/test", authRequired, async (req, res) => {
+  try {
+    const r = await sendTelegram("Test ping from server " + new Date().toISOString());
+    res.json({ ok: true, telegram: r });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+/* Trade endpoint */
 app.post("/trade", authRequired, async (req, res) => {
   const raw = req.body || {};
   const pair = raw.pair;
@@ -682,7 +934,6 @@ app.post("/trade", authRequired, async (req, res) => {
 
     if (SIMULATOR_MODE) {
       const fakeTxid = "SIM_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
-      const statusTxt = "simulated";
       const msgTxt = "Simulator mode. No Kraken order was placed.";
 
       logTrade({
@@ -693,7 +944,7 @@ app.post("/trade", authRequired, async (req, res) => {
         stopLoss,
         estProfitUsd,
         estLossUsd,
-        status: statusTxt,
+        status: "simulated",
         message: msgTxt,
         txid: fakeTxid,
         isAuto: raw.isAuto === true,
@@ -702,9 +953,7 @@ app.post("/trade", authRequired, async (req, res) => {
 
       return res.json({
         message: msgTxt,
-        entry: { descr: entryParams },
         entryTxid: fakeTxid,
-        entryStatus: { status: "simulated", vol: volumeStr, vol_exec: "0.0" },
         normalized: { entryPrice, entryPrice2, takeProfit, stopLoss, volume: volumeStr },
         simulator: true
       });
@@ -723,7 +972,6 @@ app.post("/trade", authRequired, async (req, res) => {
       (String(entryStatus.status).toLowerCase() === "closed") &&
       Number(entryStatus.vol_exec || 0) > 0;
 
-    const statusTxt = isFilledNow ? "filled" : "submitted";
     const msgTxt = isFilledNow
       ? "Entry placed and filled. Exits can be handled after fill."
       : "Entry placed. Exits will be handled after fill.";
@@ -736,7 +984,7 @@ app.post("/trade", authRequired, async (req, res) => {
       stopLoss,
       estProfitUsd,
       estLossUsd,
-      status: statusTxt,
+      status: isFilledNow ? "filled" : "submitted",
       message: msgTxt,
       txid,
       isAuto: raw.isAuto === true,
@@ -766,15 +1014,11 @@ app.post("/trade", authRequired, async (req, res) => {
       userId: req.user.uid
     });
 
-    console.error("Trade error:", err);
     res.status(500).json({ error: "Trade execution failed", details });
   }
 });
 
-app.get("/trades.html", (req, res) => {
-  res.sendFile(path.join(__dirname, "trades.html"));
-});
-
+/* JSON parse guard */
 app.use((err, req, res, next) => {
   const isJsonParseError =
     err instanceof SyntaxError &&
@@ -788,22 +1032,7 @@ app.use((err, req, res, next) => {
   next(err);
 });
 
-app.get("/api/telegram/test", async (req, res) => {
-  try {
-    const r = await sendTelegram("Test ping from server " + new Date().toISOString());
-    res.json({ ok: true, telegram: r });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e.message || e) });
-  }
-});
-
-
-
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
 });
-
-
-
-
