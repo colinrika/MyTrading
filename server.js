@@ -128,6 +128,22 @@ function authRequired(req, res, next) {
   }
 }
 
+function authPageRequired(req, res, next) {
+  try {
+    const token = req.cookies?.session || "";
+    if (!token) {
+      const nextUrl = req.originalUrl || "/dashboard.html";
+      return res.redirect("/login.html?next=" + encodeURIComponent(nextUrl));
+    }
+    const payload = jwt.verify(token, APP_SECRET);
+    req.user = payload;
+    next();
+  } catch {
+    const nextUrl = req.originalUrl || "/dashboard.html";
+    return res.redirect("/login.html?next=" + encodeURIComponent(nextUrl));
+  }
+}
+
 async function getUserKrakenClient(uid) {
   const row = await dbGet(`SELECT api_key, api_secret_enc FROM kraken_keys WHERE user_id = ?`, [uid]);
   if (!row) return null;
@@ -145,6 +161,14 @@ function roundToDecimals(value, decimals) {
   if (n === null) return null;
   const d = Math.max(0, Math.min(12, Number(decimals) || 0));
   return Number(n.toFixed(d));
+}
+
+function floorToDecimals(value, decimals) {
+  const n = numOrNull(value);
+  if (n === null) return null;
+  const d = Math.max(0, Math.min(12, Number(decimals) || 0));
+  const m = Math.pow(10, d);
+  return Math.floor(n * m) / m;
 }
 
 function trimNumberString(s) {
@@ -356,10 +380,11 @@ function buildTelegramMessage(safeTrades) {
   return msg;
 }
 
-/* Pages that must be protected */
-app.get("/dashboard.html", authRequired, (req, res) => res.sendFile(path.join(__dirname, "dashboard.html")));
-app.get("/account.html", authRequired, (req, res) => res.sendFile(path.join(__dirname, "account.html")));
-app.get("/connect-kraken.html", authRequired, (req, res) => res.sendFile(path.join(__dirname, "connect-kraken.html")));
+/* Protected pages */
+app.get("/dashboard.html", authPageRequired, (req, res) => res.sendFile(path.join(__dirname, "dashboard.html")));
+app.get("/account.html", authPageRequired, (req, res) => res.sendFile(path.join(__dirname, "account.html")));
+app.get("/connect-kraken.html", authPageRequired, (req, res) => res.sendFile(path.join(__dirname, "connect-kraken.html")));
+app.get("/strategy.html", authPageRequired, (req, res) => res.sendFile(path.join(__dirname, "strategy.html")));
 
 /* Public pages */
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "login.html")));
@@ -367,17 +392,10 @@ app.get("/login.html", (req, res) => res.sendFile(path.join(__dirname, "login.ht
 app.get("/register.html", (req, res) => res.sendFile(path.join(__dirname, "register.html")));
 app.get("/verify.html", (req, res) => res.sendFile(path.join(__dirname, "verify.html")));
 
-app.get("/dashboard", authRequired, (req, res) => {
-  res.sendFile(path.join(__dirname, "dashboard.html"));
-});
-
-app.get("/account", authRequired, (req, res) => {
-  res.sendFile(path.join(__dirname, "account.html"));
-});
-
-app.get("/connect", authRequired, (req, res) => {
-  res.sendFile(path.join(__dirname, "connect-kraken.html"));
-});
+/* Aliases */
+app.get("/dashboard", authPageRequired, (req, res) => res.sendFile(path.join(__dirname, "dashboard.html")));
+app.get("/account", authPageRequired, (req, res) => res.sendFile(path.join(__dirname, "account.html")));
+app.get("/connect", authPageRequired, (req, res) => res.sendFile(path.join(__dirname, "connect-kraken.html")));
 
 /* Static assets after protected routes */
 app.use(express.static(__dirname));
@@ -445,6 +463,7 @@ app.post("/api/login", async (req, res) => {
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
     const password = String(req.body?.password || "");
+    const nextUrl = String(req.body?.next || req.query?.next || "").trim();
 
     const user = await dbGet(`SELECT * FROM users WHERE email = ?`, [email]);
     if (!user) return res.status(400).json({ error: "Invalid login" });
@@ -461,7 +480,7 @@ app.post("/api/login", async (req, res) => {
     });
 
     const keys = await dbGet(`SELECT user_id FROM kraken_keys WHERE user_id = ?`, [user.id]);
-    return res.json({ ok: true, hasKraken: !!keys });
+    return res.json({ ok: true, hasKraken: !!keys, next: nextUrl || "" });
   } catch (err) {
     return res.status(500).json({ error: "Login failed", details: err.message });
   }
@@ -548,83 +567,20 @@ app.get("/pair-info", authRequired, async (req, res) => {
   }
 });
 
-/* Trade balance (available funds) */
-app.get("/api/trade-balance", authRequired, async (req, res) => {
-  try {
-    const client = await getUserKrakenClient(req.user.uid);
-    if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
-
-    const asset = String(req.query.asset || "ZUSD");
-    const tb = await client.api("TradeBalance", { asset });
-    const result = tb?.result || {};
-
-    const available =
-      numOrNull(result.mf) ??
-      numOrNull(result.tb) ??
-      numOrNull(result.eb) ??
-      null;
-
-    res.json({
-      ok: true,
-      asset,
-      raw: result,
-      available
-    });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: "TradeBalance failed", details: String(err?.message || err) });
-  }
-});
-
-/* Balance (totals) plus best effort available */
 app.get("/balance", authRequired, async (req, res) => {
   try {
     const client = await getUserKrakenClient(req.user.uid);
     if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
 
     const balance = await client.api("Balance");
-    let tradeBalance = null;
-
-    try {
-      const tb = await client.api("TradeBalance", { asset: "ZUSD" });
-      const r = tb?.result || {};
-      tradeBalance = {
-        asset: "ZUSD",
-        raw: r,
-        available: numOrNull(r.mf) ?? numOrNull(r.tb) ?? numOrNull(r.eb) ?? null
-      };
-    } catch {
-      tradeBalance = null;
-    }
-
-    res.json({ status: "Connected", balance: balance.result, tradeBalance });
+    res.json({ status: "Connected", balance: balance.result });
   } catch (err) {
     res.status(500).json({ error: "Failed to connect to Kraken", details: err.message });
   }
 });
 
-/* Trades list for account.html */
-app.get("/trades", authRequired, async (req, res) => {
-  const page = Math.max(1, Number(req.query.page || 1));
-  const limit = Math.max(1, Math.min(100, Number(req.query.limit || req.query.pageSize || 10)));
-  const q = String(req.query.q || "").trim().toLowerCase();
-
-  let filtered = tradeLog.filter(t => String(t.userId) === String(req.user.uid));
-  if (q) {
-    filtered = filtered.filter(t => {
-      const hay = (t.pair + " " + t.side + " " + t.orderType + " " + t.status + " " + t.message).toLowerCase();
-      return hay.includes(q);
-    });
-  }
-
-  const total = filtered.length;
-  const start = (page - 1) * limit;
-  const items = filtered.slice(start, start + limit);
-
-  res.json({ page, limit, total, items });
-});
-
-/* Price cache so you do not spam Kraken every refresh */
-const priceCache = new Map(); // pair -> { price, ts }
+/* Price cache shared */
+const priceCache = new Map();
 const PRICE_TTL_MS = 10 * 1000;
 
 async function getLastPrices(pairs) {
@@ -663,7 +619,7 @@ async function getLastPrices(pairs) {
   return out;
 }
 
-/* Batch prices for account page */
+/* Batch prices */
 app.get("/api/prices", authRequired, async (req, res) => {
   try {
     const raw = String(req.query.pairs || "");
@@ -729,7 +685,7 @@ app.post("/api/order/cancel", authRequired, async (req, res) => {
     const mine = tradeLog.find(t => String(t.userId) === String(req.user.uid) && String(t.txid) === txid);
     if (!mine) return res.status(404).json({ ok: false, error: "Order not found" });
 
-    if (SIMULATOR_MODE || String(txid).startsWith("SIM_")) {
+    if (SIMULATOR_MODE) {
       mine.status = "canceled";
       return res.json({ ok: true, canceled: true, simulator: true });
     }
@@ -825,6 +781,27 @@ app.post("/api/order/close", authRequired, async (req, res) => {
   }
 });
 
+/* Trades list for account.html */
+app.get("/trades", authRequired, async (req, res) => {
+  const page = Math.max(1, Number(req.query.page || 1));
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit || req.query.pageSize || 10)));
+  const q = String(req.query.q || "").trim().toLowerCase();
+
+  let filtered = tradeLog.filter(t => String(t.userId) === String(req.user.uid));
+  if (q) {
+    filtered = filtered.filter(t => {
+      const hay = (t.pair + " " + t.side + " " + t.orderType + " " + t.status + " " + t.message).toLowerCase();
+      return hay.includes(q);
+    });
+  }
+
+  const total = filtered.length;
+  const start = (page - 1) * limit;
+  const items = filtered.slice(start, start + limit);
+
+  res.json({ page, limit, total, items });
+});
+
 /* Alerts endpoint called by dashboard */
 app.post("/api/alerts/safest", authRequired, async (req, res) => {
   try {
@@ -900,10 +877,11 @@ app.post("/trade", authRequired, async (req, res) => {
     let volumeStr = null;
 
     if (investUsd && investUsd > 0) {
-      const vol = investUsd / nums.price;
       const ld = meta.lot_decimals ?? 8;
-      const vRounded = roundToDecimals(vol, ld);
-      volumeStr = vRounded === null ? null : trimNumberString(vRounded.toFixed(ld));
+      const vol = investUsd / nums.price;
+
+      const vFloored = floorToDecimals(vol, ld);
+      volumeStr = vFloored === null ? null : trimNumberString(vFloored.toFixed(ld));
     } else {
       volumeStr = nums.volumeStr;
     }
@@ -996,46 +974,6 @@ app.post("/trade", authRequired, async (req, res) => {
       });
     }
 
-    /* Helpful funds check before AddOrder */
-    if (String(side).toLowerCase() === "buy") {
-      let availableUsd = null;
-      try {
-        const tb = await client.api("TradeBalance", { asset: "ZUSD" });
-        const r = tb?.result || {};
-        availableUsd = numOrNull(r.mf) ?? numOrNull(r.tb) ?? numOrNull(r.eb) ?? null;
-      } catch {
-        availableUsd = null;
-      }
-
-      if (availableUsd !== null) {
-        const feeBufferRate = 0.01;
-        const required = (volNum * entryPrice) * (1 + feeBufferRate);
-        if (required > availableUsd + 1e-10) {
-          const msg = "Insufficient available ZUSD for this buy. Your funds might be in another asset, or not available for trading.";
-          logTrade({
-            pair, side, orderType, investUsd,
-            volume: volumeStr,
-            entryPrice,
-            takeProfit,
-            stopLoss,
-            estProfitUsd,
-            estLossUsd,
-            status: "rejected",
-            message: msg + " Available " + availableUsd.toFixed(4) + " Required about " + required.toFixed(4),
-            isAuto: raw.isAuto === true,
-            userId: req.user.uid
-          });
-
-          return res.status(400).json({
-            error: "Insufficient funds",
-            hint: msg,
-            availableZUSD: availableUsd,
-            requiredZUSDApprox: required
-          });
-        }
-      }
-    }
-
     const mainOrder = await client.api("AddOrder", entryParams);
     const txid = Array.isArray(mainOrder?.result?.txid) ? mainOrder.result.txid[0] : "";
 
@@ -1092,43 +1030,6 @@ app.post("/trade", authRequired, async (req, res) => {
     });
 
     res.status(500).json({ error: "Trade execution failed", details });
-  }
-});
-
-app.post("/api/orders/cancel", authRequired, async (req, res) => {
-  try {
-    const txid = String(req.body?.txid || "").trim();
-    if (!txid) return res.status(400).json({ ok: false, error: "Missing txid" });
-
-    if (String(txid).startsWith("SIM_")) {
-      return res.json({ ok: true, canceled: true, simulator: true });
-    }
-
-    const client = await getUserKrakenClient(req.user.uid);
-    if (!client) return res.status(400).json({ ok: false, error: "No Kraken keys saved" });
-
-    const r = await client.api("CancelOrder", { txid });
-
-    return res.json({
-      ok: true,
-      canceled: true,
-      result: r?.result || null
-    });
-  } catch (err) {
-    const msg = String(err?.message || err);
-    const apiErr = Array.isArray(err?.response?.error) ? err.response.error.join(", ") : "";
-
-    const combined = (apiErr || msg || "").toString();
-
-    if (combined.includes("EOrder:Unknown order")) {
-      return res.status(400).json({
-        ok: false,
-        error: "Unknown order",
-        hint: "This order is not open anymore, or you are not sending the real txid."
-      });
-    }
-
-    return res.status(500).json({ ok: false, error: "Cancel failed", details: combined });
   }
 });
 

@@ -1,617 +1,172 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8" />
-  <title>🚀 Namu Trading</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <title>📈 Dashboard</title>
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      background-color: #0d1117;
-      color: #e6edf3;
-      text-align: center;
-      margin: 0;
-      padding: 20px;
+    body { font-family: Arial, sans-serif; background-color: #0d1117; color: #e6edf3; margin: 0; padding: 20px; }
+    h2 { color: #58a6ff; margin: 8px 0 12px 0; text-align: center; }
+
+    .wrap { width: 92%; max-width: 1200px; margin: 0 auto; }
+    .topBar { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+
+    a.linkBtn, button.linkBtn {
+      text-decoration:none; background:#58a6ff; color:#fff; font-weight:bold;
+      border-radius:10px; padding:10px 14px; display:inline-block; border:none; cursor:pointer;
+    }
+    a.linkBtn:hover, button.linkBtn:hover { filter: brightness(1.05); }
+    button.grayBtn { background:#30363d; }
+
+    .panel { background: #161b22; border: 2px solid #30363d; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+    .panel h3 { margin: 0 0 10px 0; font-size: 16px; }
+
+    .kvRow { display:flex; justify-content:space-between; gap:10px; border-bottom:1px solid rgba(255,255,255,0.06); padding:6px 0; }
+    .kvRow:last-child { border-bottom:none; }
+
+    .muted { color:#8b949e; font-size:12px; }
+    .good { color: lightgreen; }
+    .bad { color:#ff5555; }
+    .warn { color:#ffcc00; }
+
+    .controls { display:flex; gap:10px; flex-wrap:wrap; align-items:end; }
+    .control { display:flex; flex-direction:column; gap:6px; }
+    input, select {
+      border-radius:10px; border:1px solid #30363d; background:#0d1117; color:#e6edf3;
+      padding:10px 12px; width:220px; box-sizing:border-box;
     }
 
-    h2 {
-      color: #58a6ff;
-      margin: 8px 0 10px 0;
-    }
+    table { width:100%; border-collapse:collapse; margin-top:10px; }
+    th, td { padding:10px; border:1px solid #30363d; vertical-align:top; }
+    th { background:#0d1117; text-align:left; }
+    tr.clickable { cursor:pointer; }
+    tr.clickable:hover { background: rgba(88,166,255,0.08); }
 
-    .topBar {
-      width: 92%;
-      max-width: 1100px;
-      margin: 0 auto 12px auto;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
-
-    .pill {
-      background: #161b22;
-      border: 2px solid #30363d;
-      padding: 10px 12px;
-      border-radius: 10px;
-      color: #e6edf3;
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
-
-    a.linkBtn,
-    button.linkBtn {
-      text-decoration: none;
-      background: #58a6ff;
-      color: #fff;
-      font-weight: bold;
-      border-radius: 10px;
-      padding: 10px 14px;
-      display: inline-block;
-      border: none;
-      cursor: pointer;
-    }
-
-    a.linkBtn:hover,
-    button.linkBtn:hover {
-      filter: brightness(1.05);
-    }
-
-    #alertBox {
-      background-color: #161b22;
-      border: 2px solid #30363d;
-      padding: 15px;
-      border-radius: 10px;
-      width: 92%;
-      max-width: 1100px;
-      margin: 0 auto 14px auto;
-      text-align: left;
-    }
-
-    #safePanel {
-      width: 92%;
-      max-width: 1100px;
-      margin: 12px auto;
-      padding: 12px;
-      background: #161b22;
-      border: 2px solid #30363d;
-      border-radius: 10px;
-      text-align: left;
-    }
-
-    #safePanel h3 {
-      margin: 0 0 10px 0;
-    }
-
-    .muted {
-      color: #8b949e;
-      font-size: 12px;
-    }
-
-    .safeTrade {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      background: #0d1117;
-      border-radius: 8px;
-      padding: 10px 14px;
-      margin: 8px 0;
-      cursor: pointer;
-      transition: 0.3s;
-      gap: 12px;
-    }
-
-    .safeTrade:hover {
-      background: #1f6feb33;
-    }
-
-    .safeBadge {
-      font-size: 12px;
-      font-weight: bold;
-      border-radius: 6px;
-      padding: 4px 8px;
-      background: #00c85333;
-      color: lightgreen;
-      white-space: nowrap;
-    }
-
-    .safeTag {
-      font-size: 12px;
-      padding: 4px 10px;
-      border-radius: 999px;
-      border: 1px solid #30363d;
-      background: #0d1117;
-      color: #e6edf3;
-      white-space: nowrap;
-    }
-
-    table {
-      width: 92%;
-      max-width: 1100px;
-      margin: 16px auto;
-      border-collapse: collapse;
-    }
-
-    th,
-    td {
-      padding: 10px;
-      border: 1px solid #30363d;
-      cursor: pointer;
-    }
-
-    th {
-      background-color: #161b22;
-    }
-
-    tr:hover {
-      background-color: #1f6feb44;
-    }
-
-    .strongBuy {
-      color: lightgreen;
-      font-weight: bold;
-    }
-
-    .neutral {
-      color: #ffcc00;
-    }
-
-    .highlightRow {
-      box-shadow: 0 0 12px 2px rgba(0, 255, 0, 0.3);
-      animation: pulse 1.8s infinite alternate;
-    }
-
-    @keyframes pulse {
-      from {
-        box-shadow: 0 0 6px rgba(0, 255, 0, 0.1);
-      }
-
-      to {
-        box-shadow: 0 0 14px rgba(0, 255, 0, 0.5);
-      }
-    }
-
-    footer {
-      margin-top: 20px;
-      color: #8b949e;
-    }
-
-    .modal {
-      display: none;
-      position: fixed;
-      z-index: 10;
-      left: 0;
-      top: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0, 0, 0, 0.6);
-      overflow-y: auto;
-    }
-
-    .modal-content {
-      background: #161b22;
-      margin: 3% auto;
-      padding: 18px;
-      border: 2px solid #30363d;
-      border-radius: 10px;
-      width: 92%;
-      max-width: 1100px;
-      color: #e6edf3;
-      text-align: left;
-      max-height: 92vh;
-      overflow-y: auto;
-    }
-
-    .close {
-      float: right;
-      color: #aaa;
-      font-size: 22px;
-      cursor: pointer;
-    }
-
-    .close:hover {
-      color: #fff;
-    }
-
-    canvas {
-      width: 100%;
-      height: 460px !important;
-      margin-top: 10px;
-    }
-
-    .profitBox {
-      border: 1px solid #30363d;
-      background-color: #0d1117;
-      border-radius: 10px;
-      padding: 12px;
-      margin-top: 12px;
-    }
-
-    .rowFlex {
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
-
-    .rowFlex>div {
-      flex: 1 1 260px;
-    }
-
-    input,
-    select {
-      border-radius: 6px;
-      border: 1px solid #30363d;
-      background: #0d1117;
-      color: #e6edf3;
-      padding: 6px 8px;
-      width: 100%;
-      box-sizing: border-box;
-    }
-
-    button.primaryBtn {
-      width: 100%;
-      border: none;
-      border-radius: 10px;
-      padding: 14px 16px;
-      font-weight: bold;
-      cursor: pointer;
-      background: #58a6ff;
-      color: #fff;
-      margin-top: 10px;
-      font-size: 16px;
-    }
-
-    button.primaryBtn:disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
-    }
-
-    .strategyTag {
-      display: inline-block;
-      padding: 4px 10px;
-      border-radius: 999px;
-      border: 1px solid #30363d;
-      background: #0d1117;
-      color: #e6edf3;
-      font-size: 12px;
-      margin-left: 8px;
-      vertical-align: middle;
-    }
-
-    .good {
-      color: lightgreen;
-    }
-
-    .warn {
-      color: #ffcc00;
-    }
-
-    .bad {
-      color: #ff5555;
-    }
+    .pill { background:#0d1117; border:1px solid #30363d; border-radius:999px; padding:6px 10px; display:inline-block; }
+    .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+    @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
   </style>
 </head>
-
 <body>
-  <h2>🚀 Namu Trading Dashboard</h2>
+  <div class="wrap">
+    <h2>📈 Dashboard</h2>
 
-  <div class="topBar">
-    <div class="pill">
-      <span class="warn">Live trading</span>
-      <span class="muted" id="usdQuick">ZUSD loading</span>
-      <span class="muted" id="modeBadge"></span>
-      <span class="muted" id="authBadge"></span>
+    <div class="topBar">
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <a class="linkBtn" href="/account.html">📒 Account</a>
+        <a class="linkBtn" href="/connect-kraken.html">🔑 Kraken</a>
+        <button class="linkBtn grayBtn" id="btnLogout">Logout</button>
+      </div>
+      <div class="pill">
+        <span class="muted">USD </span><span id="usdBal" class="good" style="font-weight:bold;">0.0000</span>
+        <span class="muted" style="margin-left:10px;">Updated </span><span id="updated" class="muted"></span>
+      </div>
     </div>
 
-    <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center;">
-      <label class="pill" style="cursor:pointer;">
-        <input id="aggressiveToggle" type="checkbox" style="width:auto; margin:0 8px 0 0;">
-        <span style="font-weight:bold;">Aggressive Mode</span>
-        <span class="muted" id="aggressiveBadge">Off</span>
-      </label>
+    <div class="panel">
+      <h3>Scanner</h3>
+      <div class="controls">
+        <div class="control">
+          <div class="muted">Max scan pairs</div>
+          <input id="maxPairs" type="number" value="30" min="5" max="200" />
+        </div>
+        <div class="control">
+          <div class="muted">Quality minimum</div>
+          <input id="minQuality" type="number" value="80" min="0" max="100" />
+        </div>
+        <div class="control">
+          <div class="muted">Top results</div>
+          <input id="topSend" type="number" value="10" min="1" max="50" />
+        </div>
+        <div class="control">
+          <button class="linkBtn" id="btnScan">Scan now</button>
+        </div>
+        <div class="control">
+          <button class="linkBtn grayBtn" id="btnAuto">Auto scan on</button>
+        </div>
+      </div>
+      <div class="muted" style="margin-top:10px;" id="scanStatus">Idle</div>
+    </div>
 
-      <a id="connectKrakenBtn" class="linkBtn" href="/connect-kraken.html">🔑 Connect Kraken</a>
-      <a class="linkBtn" href="/account.html">📒 Trades</a>
-      <button class="linkBtn" id="logoutBtn">🚪 Logout</button>
+    <div class="grid2">
+      <div class="panel">
+        <h3>Safest trades</h3>
+        <div class="muted">Click a row to open its strategy page in a new tab.</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Pair</th>
+              <th>Side</th>
+              <th>Quality</th>
+              <th>Entry</th>
+              <th>TP</th>
+              <th>SL</th>
+              <th>Tag</th>
+            </tr>
+          </thead>
+          <tbody id="safeBody"></tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <h3>Status</h3>
+        <div id="statusBox">
+          <div class="kvRow"><span class="muted">Email verified</span><span class="muted">...</span></div>
+          <div class="kvRow"><span class="muted">Kraken connected</span><span class="muted">...</span></div>
+          <div class="kvRow"><span class="muted">Mode</span><span class="muted">...</span></div>
+        </div>
+        <div class="muted" style="margin-top:10px;">
+          If scan shows nothing, it usually means you are in chop or you do not have a fresh reclaim candle.
+        </div>
+      </div>
     </div>
   </div>
-
-  <div id="safePanel">
-    <h3>🛡️ Safest Trades Right Now</h3>
-    <div class="muted">This list only shows fresh reclaim setups from the last few five minute candles.</div>
-    <div id="safeTradesList">Loading...</div>
-  </div>
-
-  <div id="alertBox">Fetching market data...</div>
-
-  <table id="results">
-    <thead>
-      <tr>
-        <th>Coin</th>
-        <th>Price</th>
-        <th>Forecast Change</th>
-        <th>RSI</th>
-        <th>Score</th>
-        <th>Signal</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
-
-  <div id="strategyModal" class="modal">
-    <div class="modal-content">
-      <span class="close" id="modalCloseBtn">&times;</span>
-      <h3 id="modalTitle"></h3>
-      <canvas id="projectionChart"></canvas>
-      <div id="modalContent"></div>
-    </div>
-  </div>
-
-  <footer>📊 Created by Colin Rika</footer>
 
   <script>
-    const AUTO_TRADING_ALWAYS_ON = false;
-
-    const MAX_SCAN_PAIRS = 60;
-
-    const RSI_PERIOD = 14;
-
-    const H1_INTERVAL_MIN = 60;
-    const H4_INTERVAL_MIN = 240;
-    const M5_INTERVAL_MIN = 5;
-
-    const H1_CANDLES = 260;
-    const H4_CANDLES = 260;
-    const M5_CANDLES = 180;
-
-    const blockedPairs = new Set(JSON.parse(localStorage.getItem("blockedPairs") || "[]"));
-
-    const alertBoxEl = document.getElementById("alertBox");
-    const safeListEl = document.getElementById("safeTradesList");
-    const tableBodyEl = document.querySelector("#results tbody");
-
-    const modalEl = document.getElementById("strategyModal");
-    const modalTitleEl = document.getElementById("modalTitle");
-    const modalContentEl = document.getElementById("modalContent");
-    const modalCloseBtnEl = document.getElementById("modalCloseBtn");
-    const projectionCanvasEl = document.getElementById("projectionChart");
-
-    let SIMULATOR = false;
-
-    let AGGRESSIVE_MODE = String(localStorage.getItem("AGGRESSIVE_MODE") || "false").toLowerCase() === "true";
-
-    function setAggressiveUi() {
-      const cb = document.getElementById("aggressiveToggle");
-      const badge = document.getElementById("aggressiveBadge");
-      if (cb) cb.checked = AGGRESSIVE_MODE;
-      if (badge) badge.textContent = AGGRESSIVE_MODE ? "On" : "Off";
-    }
-
-    let intervalIds = [];
-    let loggedOut = false;
-    let redirecting = false;
+    let autoOn = false;
+    let autoTimer = null;
 
     function apiUrl(p) { return window.location.origin + p; }
 
-    function startIntervals() {
-      intervalIds.push(setInterval(refreshMode, 30000));
-      intervalIds.push(setInterval(refreshUsdQuick, 30000));
-      intervalIds.push(setInterval(analyze, 300000));
-    }
-
-    function stopIntervals() {
-      for (const id of intervalIds) clearInterval(id);
-      intervalIds = [];
-    }
-
-    function redirectToLoginOnce() {
-      if (redirecting) return;
-      redirecting = true;
-      loggedOut = true;
-      stopIntervals();
-      window.location.replace("/login.html");
-    }
-
-    function toggleAccountAccess(loggedIn) {
-      const btn = document.querySelector("a[href='/account.html']");
-      if (!btn) return;
-      btn.style.display = loggedIn ? "inline-block" : "none";
-    }
-
     async function getJson(url) {
-      const resp = await fetch(url, { credentials: "include" });
-      const text = await resp.text();
-      let data = {};
-      try { data = JSON.parse(text); } catch { data = { raw: text }; }
+      const r = await fetch(url, { credentials: "include" });
+      const t = await r.text();
+      let d = {};
+      try { d = JSON.parse(t); } catch { d = { raw: t }; }
 
-      if (!resp.ok) {
-        if (resp.status === 401) {
-          redirectToLoginOnce();
+      if (!r.ok) {
+        if (r.status === 401) {
+          window.location.replace("/login.html?next=" + encodeURIComponent(window.location.pathname + window.location.search));
           throw new Error("Unauthorized");
         }
-        const err = new Error(data?.details || data?.error || ("Request failed " + resp.status));
-        err.payload = data;
-        throw err;
+        throw new Error(d.error || d.details || ("Request failed " + r.status));
       }
-      return data;
+      return d;
     }
 
     async function postJson(url, payload) {
-      const resp = await fetch(url, {
+      const r = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
         credentials: "include"
       });
+      const t = await r.text();
+      let d = {};
+      try { d = JSON.parse(t); } catch { d = { raw: t }; }
 
-      const text = await resp.text();
-      let data = {};
-      try { data = JSON.parse(text); } catch { data = { raw: text }; }
-
-      if (!resp.ok) {
-        if (resp.status === 401) {
-          redirectToLoginOnce();
+      if (!r.ok) {
+        if (r.status === 401) {
+          window.location.replace("/login.html?next=" + encodeURIComponent(window.location.pathname + window.location.search));
           throw new Error("Unauthorized");
         }
-        const err = new Error(data?.details || data?.error || ("Request failed " + resp.status));
-        err.payload = data;
-        throw err;
+        throw new Error(d.error || d.details || ("Request failed " + r.status));
       }
-      return data;
-    }
-
-    async function ensureLoggedIn() {
-      try {
-        await getJson(apiUrl("/balance"));
-        document.getElementById("authBadge").textContent = "Logged in";
-        toggleAccountAccess(true);
-      } catch {
-        toggleAccountAccess(false);
-        redirectToLoginOnce();
-      }
-    }
-
-    function hideConnectBtn() {
-      const btn = document.getElementById("connectKrakenBtn");
-      if (btn) btn.style.display = "none";
-    }
-
-    function showConnectBtn() {
-      const btn = document.getElementById("connectKrakenBtn");
-      if (btn) btn.style.display = "inline-block";
-    }
-
-    async function checkKrakenConnectedAndToggle() {
-      try {
-        const s = await getJson(apiUrl("/api/account/status"));
-
-        const raw =
-          s?.krakenConnected ??
-          s?.connected ??
-          s?.isConnected ??
-          s?.data?.krakenConnected ??
-          s?.data?.connected;
-
-        const connected = raw === true || raw === "true" || raw === 1 || raw === "1";
-
-        if (connected) {
-          hideConnectBtn();
-          return;
-        }
-      } catch {
-      }
-
-      try {
-        const d = await getJson(apiUrl("/balance"));
-        const usd = Number(d?.balance?.ZUSD);
-        if (Number.isFinite(usd)) {
-          hideConnectBtn();
-          return;
-        }
-      } catch {
-      }
-
-      showConnectBtn();
-    }
-
-    async function doLogout() {
-      loggedOut = true;
-      stopIntervals();
-      try { await postJson(apiUrl("/api/logout"), {}); } catch { }
-      redirectToLoginOnce();
-    }
-
-    document.getElementById("logoutBtn").addEventListener("click", doLogout);
-
-    async function refreshMode() {
-      if (loggedOut) return;
-      try {
-        const m = await getJson(apiUrl("/mode"));
-        SIMULATOR = m && m.simulator === true;
-        document.getElementById("modeBadge").textContent = SIMULATOR ? "Simulator ON" : "Simulator OFF";
-      } catch {
-        SIMULATOR = false;
-        document.getElementById("modeBadge").textContent = "";
-      }
-    }
-
-    function prettyPair(pair) { return String(pair).replace("X", "").replace("ZUSD", "/USD"); }
-
-    function blockPair(pair) {
-      blockedPairs.add(pair);
-      localStorage.setItem("blockedPairs", JSON.stringify(Array.from(blockedPairs)));
+      return d;
     }
 
     function num(v) {
       const n = Number(v);
       return Number.isFinite(n) ? n : 0;
-    }
-
-    async function getPairInfo(pair) {
-      try {
-        return await getJson(apiUrl("/pair-info?pair=" + encodeURIComponent(pair)));
-      } catch {
-        return { ordermin: null, costmin: null };
-      }
-    }
-
-    function calcMinUsd(pairInfo, price) {
-      const ordermin = num(pairInfo?.ordermin);
-      const costmin = num(pairInfo?.costmin);
-      const byVol = (ordermin > 0) ? (ordermin * price) : 0;
-      const byCost = (costmin > 0) ? costmin : 0;
-      const minUsd = Math.max(byVol, byCost);
-      return (minUsd > 0) ? minUsd : 0;
-    }
-
-    function linearRegression(y, x) {
-      const n = y.length;
-      const sumx = x.reduce((a, b) => a + b, 0);
-      const sumy = y.reduce((a, b) => a + b, 0);
-      const sumxy = y.reduce((a, b, i) => a + b * x[i], 0);
-      const sumxx = x.reduce((a, b) => a + b * b, 0);
-      const denom = (n * sumxx - sumx * sumx);
-      const m = denom === 0 ? 0 : (n * sumxy - sumx * sumy) / denom;
-      const b = (sumy - m * sumx) / n;
-      return { m, b };
-    }
-
-    function calculateRSI_Wilder(closes, period) {
-      if (!Array.isArray(closes) || closes.length < period + 1) return 50;
-
-      let gains = 0;
-      let losses = 0;
-
-      for (let i = 1; i <= period; i++) {
-        const delta = closes[i] - closes[i - 1];
-        if (delta >= 0) gains += delta;
-        else losses -= delta;
-      }
-
-      let avgGain = gains / period;
-      let avgLoss = losses / period;
-
-      for (let i = period + 1; i < closes.length; i++) {
-        const delta = closes[i] - closes[i - 1];
-        const gain = delta > 0 ? delta : 0;
-        const loss = delta < 0 ? -delta : 0;
-        avgGain = (avgGain * (period - 1) + gain) / period;
-        avgLoss = (avgLoss * (period - 1) + loss) / period;
-      }
-
-      if (avgLoss === 0) return 100;
-      const rs = avgGain / avgLoss;
-      return 100 - (100 / (1 + rs));
-    }
-
-    function buildScore(predChange, trendSlope, rsi) {
-      const bonusMidRsi = (rsi >= 50 && rsi <= 65) ? 5 : 0;
-      const penaltyOverbought = (rsi > 70) ? 10 : 0;
-      return (predChange * 2) + (trendSlope * 10) + bonusMidRsi - penaltyOverbought;
     }
 
     function ema(values, period) {
@@ -623,27 +178,6 @@
         e = values[i] * k + e * (1 - k);
       }
       return e;
-    }
-
-    function emaSeries(values, period) {
-      if (!Array.isArray(values) || values.length === 0) return [];
-      const out = new Array(values.length).fill(null);
-      if (values.length < period) return out;
-
-      const k = 2 / (period + 1);
-
-      let sum = 0;
-      for (let i = 0; i < period; i++) sum += values[i];
-      let e = sum / period;
-
-      out[period - 1] = e;
-
-      for (let i = period; i < values.length; i++) {
-        e = values[i] * k + e * (1 - k);
-        out[i] = e;
-      }
-
-      return out;
     }
 
     function vwapFromCandles(candles) {
@@ -658,6 +192,8 @@
         const close = Number(c.close);
         const volume = Number(c.volume);
 
+        if (!Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close) || !Number.isFinite(volume)) continue;
+
         const tp = (high + low + close) / 3;
         pv += tp * volume;
         vol += volume;
@@ -671,9 +207,7 @@
       const n = Math.max(3, Number(lookbackBars || 10));
       if (!Array.isArray(closes) || closes.length < n) return null;
       let m = Infinity;
-      for (let i = closes.length - n; i < closes.length; i++) {
-        m = Math.min(m, closes[i]);
-      }
+      for (let i = closes.length - n; i < closes.length; i++) m = Math.min(m, closes[i]);
       return Number.isFinite(m) ? m : null;
     }
 
@@ -681,262 +215,18 @@
       const n = Math.max(3, Number(lookbackBars || 10));
       if (!Array.isArray(closes) || closes.length < n) return null;
       let m = -Infinity;
-      for (let i = closes.length - n; i < closes.length; i++) {
-        m = Math.max(m, closes[i]);
-      }
+      for (let i = closes.length - n; i < closes.length; i++) m = Math.max(m, closes[i]);
       return Number.isFinite(m) ? m : null;
     }
 
-    function decideStrategyOrder(res, currentPrice, aggressive) {
-      const h1 = res.h1 || [];
-      const h4 = res.h4 || [];
-      const m5 = res.m5 || [];
-
-      const h1Closes = h1.map(x => x.close);
-      const h4Closes = h4.map(x => x.close);
-      const m5Closes = m5.map(x => x.close);
-
-      if (h1Closes.length < 220 || h4Closes.length < 220 || m5Closes.length < 60) {
-        return {
-          tag: "Not enough data",
-          actionTitle: "No trade right now",
-          details: "Not enough candles to calculate EMA 200 trend and 5 minute pullback rules.",
-          side: null,
-          orderType: null,
-          price: null,
-          quality: 0,
-          explain: "Need more candles",
-          next: "Wait for more market data to load."
-        };
-      }
-
-      const ema200H1 = ema(h1Closes, 200);
-      const ema200H4 = ema(h4Closes, 200);
-
-      const lastH1 = h1Closes[h1Closes.length - 1];
-      const lastH4 = h4Closes[h4Closes.length - 1];
-
-      const upBias = lastH1 > ema200H1 && lastH4 > ema200H4;
-      const downBias = lastH1 < ema200H1 && lastH4 < ema200H4;
-
-      const m5Ema20Series = emaSeries(m5Closes, 20);
-      const m5Vwap = vwapFromCandles(m5);
-
-      const explainBase =
-        "Higher timeframe trend uses EMA 200 on 1 hour and 4 hour. " +
-        "Entry uses 5 minute pullback to EMA 20 or VWAP, then a reclaim candle. " +
-        "Stop goes beyond the pullback swing point, so the trade is invalidated cleanly.";
-
-      if (!upBias && !downBias) {
-        return {
-          tag: "Chop zone",
-          actionTitle: "No trade right now",
-          details:
-            "Price is too close to EMA 200 on 1 hour or 4 hour, so direction is unclear. " +
-            "This is where fake moves happen. " + explainBase,
-          side: null,
-          orderType: null,
-          price: null,
-          quality: 0,
-          explain: explainBase,
-          next: "Wait until both 1 hour and 4 hour are clearly above or below EMA 200."
-        };
-      }
-
-      function isReclaimLongAt(i) {
-        const emaNow = m5Ema20Series[i];
-        const emaPrev = m5Ema20Series[i - 1];
-        if (!Number.isFinite(emaNow) || !Number.isFinite(emaPrev) || !Number.isFinite(m5Vwap)) return false;
-
-        const cNow = m5Closes[i];
-        const cPrev = m5Closes[i - 1];
-
-        const prevBelow = (cPrev <= emaPrev) || (cPrev <= m5Vwap);
-        const nowAbove = (cNow > emaNow) && (cNow > m5Vwap);
-        return prevBelow && nowAbove;
-      }
-
-      function isReclaimShortAt(i) {
-        const emaNow = m5Ema20Series[i];
-        const emaPrev = m5Ema20Series[i - 1];
-        if (!Number.isFinite(emaNow) || !Number.isFinite(emaPrev) || !Number.isFinite(m5Vwap)) return false;
-
-        const cNow = m5Closes[i];
-        const cPrev = m5Closes[i - 1];
-
-        const prevAbove = (cPrev >= emaPrev) || (cPrev >= m5Vwap);
-        const nowBelow = (cNow < emaNow) && (cNow < m5Vwap);
-        return prevAbove && nowBelow;
-      }
-
-      let reclaimBarsAgo = null;
-      const lastIdx = m5Closes.length - 1;
-
-      for (let i = lastIdx; i >= Math.max(1, lastIdx - 2); i--) {
-        if (upBias && isReclaimLongAt(i)) { reclaimBarsAgo = lastIdx - i; break; }
-        if (downBias && isReclaimShortAt(i)) { reclaimBarsAgo = lastIdx - i; break; }
-      }
-
-      const isFreshSetup = reclaimBarsAgo !== null && reclaimBarsAgo <= 2;
-      const reclaimLong = upBias && reclaimBarsAgo !== null;
-      const reclaimShort = downBias && reclaimBarsAgo !== null;
-
-      if (upBias) {
-        if (!reclaimLong) {
-          return {
-            tag: "Waiting for pullback reclaim",
-            actionTitle: "No trade yet",
-            details:
-              "Trend bias is up, but the 5 minute chart has not reclaimed EMA 20 and VWAP after a pullback. " +
-              "Entering early is how you buy the falling knife. " + explainBase,
-            side: null,
-            orderType: null,
-            price: null,
-            quality: 0,
-            explain: explainBase,
-            next: "Wait for a 5 minute close back above EMA 20 and VWAP after price pulled into that area."
-          };
-        }
-
-        if (!isFreshSetup) {
-          return {
-            tag: "Setup too old",
-            actionTitle: "No trade right now",
-            details:
-              "Trend is up, but the reclaim happened too long ago. Your safest list only shows fresh reclaim setups. " +
-              explainBase,
-            side: null,
-            orderType: null,
-            price: null,
-            quality: 0,
-            explain: explainBase,
-            next: "Wait for a new reclaim after a pullback, not a late entry."
-          };
-        }
-
-        const entry = currentPrice;
-        const swingLow = approxPullbackSwingLow(m5Closes, 12);
-        const stop = swingLow ? (swingLow * 0.999) : (entry * 0.992);
-        const r = entry - stop;
-        const tp = entry + (r * (aggressive ? 1.5 : 2.0));
-
-        let q = aggressive ? 75 : 85;
-        if (reclaimBarsAgo === 1) q -= 8;
-        if (reclaimBarsAgo === 2) q -= 15;
-
-        return {
-          tag: "Trend pullback reclaim",
-          actionTitle: "Buy after pullback confirms",
-          details:
-            "Both 1 hour and 4 hour trends are above EMA 200. Price pulled back on 5 minute and reclaimed EMA 20 and VWAP. " +
-            "That is a momentum entry with a clear invalidation point. " + explainBase,
-          side: "buy",
-          orderType: "limit",
-          price: entry,
-          quality: q,
-          explain: explainBase,
-          next:
-            "Stop is placed beyond the pullback swing low. Take profit is based on your risk distance, not a random percent.",
-          stopLoss: stop,
-          takeProfit: tp,
-          fresh: true,
-          freshBarsAgo: reclaimBarsAgo
-        };
-      }
-
-      if (downBias) {
-        if (!reclaimShort) {
-          return {
-            tag: "Waiting for pullback reclaim",
-            actionTitle: "No trade yet",
-            details:
-              "Trend bias is down, but the 5 minute chart has not reclaimed EMA 20 and VWAP downward after a pullback. " +
-              "Chasing without confirmation is how shorts get trapped. " + explainBase,
-            side: null,
-            orderType: null,
-            price: null,
-            quality: 0,
-            explain: explainBase,
-            next: "Wait for a 5 minute close back below EMA 20 and VWAP after price bounced into that area."
-          };
-        }
-
-        if (!isFreshSetup) {
-          return {
-            tag: "Setup too old",
-            actionTitle: "No trade right now",
-            details:
-              "Trend is down, but the reclaim happened too long ago. Your safest list only shows fresh reclaim setups. " +
-              explainBase,
-            side: null,
-            orderType: null,
-            price: null,
-            quality: 0,
-            explain: explainBase,
-            next: "Wait for a new reclaim after a pullback, not a late entry."
-          };
-        }
-
-        const entry = currentPrice;
-        const swingHigh = approxPullbackSwingHigh(m5Closes, 12);
-        const stop = swingHigh ? (swingHigh * 1.001) : (entry * 1.008);
-        const r = stop - entry;
-        const tp = entry - (r * (aggressive ? 1.5 : 2.0));
-
-        let q = aggressive ? 70 : 82;
-        if (reclaimBarsAgo === 1) q -= 8;
-        if (reclaimBarsAgo === 2) q -= 15;
-
-        return {
-          tag: "Trend pullback reclaim",
-          actionTitle: "Sell after pullback confirms",
-          details:
-            "Both 1 hour and 4 hour trends are below EMA 200. Price pulled back on 5 minute and reclaimed EMA 20 and VWAP downward. " +
-            "That is a continuation entry with defined risk. " + explainBase,
-          side: "sell",
-          orderType: "limit",
-          price: entry,
-          quality: q,
-          explain: explainBase,
-          next:
-            "Stop is placed beyond the pullback swing high. Take profit is based on your risk distance, not a random percent.",
-          stopLoss: stop,
-          takeProfit: tp,
-          fresh: true,
-          freshBarsAgo: reclaimBarsAgo
-        };
-      }
-
-      return {
-        tag: "No setup",
-        actionTitle: "No trade right now",
-        details: "No clean trend plus pullback reclaim setup right now. " + explainBase,
-        side: null,
-        orderType: null,
-        price: null,
-        quality: 0,
-        explain: explainBase,
-        next: "Wait for clearer trend alignment and a reclaim candle."
-      };
+    function round6(n) {
+      const x = Number(n);
+      if (!Number.isFinite(x)) return "0";
+      return x.toFixed(6);
     }
 
-    function openModal() { modalEl.style.display = "block"; }
-    function closeModal() { modalEl.style.display = "none"; }
-    modalCloseBtnEl.addEventListener("click", closeModal);
-    window.addEventListener("click", (e) => { if (e.target === modalEl) closeModal(); });
-
-    async function refreshUsdQuick() {
-      if (loggedOut) return;
-      try {
-        const d = await getJson(apiUrl("/balance"));
-        const totalZusd = Number(d.balance?.ZUSD || 0);
-        const avail = Number(d.tradeBalance?.available ?? totalZusd);
-        const ts = new Date().toLocaleTimeString();
-        document.getElementById("usdQuick").textContent =
-          "ZUSD available " + avail.toFixed(4) + " total " + totalZusd.toFixed(4) + " updated " + ts;
-      } catch {
-        document.getElementById("usdQuick").textContent = "ZUSD unavailable";
-      }
+    function prettyPair(pair) {
+      return String(pair || "").replace("X", "").replace("ZUSD", "/USD");
     }
 
     async function getAllUsdPairs() {
@@ -947,7 +237,7 @@
 
       for (const key of Object.keys(result)) {
         const info = result[key];
-        const wsname = info?.wsname || "";
+        const wsname = info && info.wsname ? info.wsname : "";
         if (!wsname.endsWith("/USD")) continue;
         if (String(key).includes(".")) continue;
         pairs.push(key);
@@ -963,23 +253,20 @@
     }
 
     async function getTopPairsByVolumeUsd(allPairs, topN) {
-      const pairs = allPairs.slice();
       const batchSize = 20;
       const scores = [];
 
-      for (let i = 0; i < pairs.length; i += batchSize) {
-        const chunk = pairs.slice(i, i + batchSize);
+      for (let i = 0; i < allPairs.length; i += batchSize) {
+        const chunk = allPairs.slice(i, i + batchSize);
         let tick = {};
         try { tick = await fetchTickerBatch(chunk); } catch { tick = {}; }
 
         for (const pairKey of chunk) {
           const t = tick[pairKey];
           if (!t) continue;
-
           const last = Number(t.c && t.c[0]) || 0;
           const vol24 = Number(t.v && t.v[1]) || 0;
           const volUsd = last * vol24;
-
           if (volUsd > 0) scores.push({ pair: pairKey, volUsd });
         }
       }
@@ -989,13 +276,15 @@
     }
 
     async function fetchOHLC(pair, intervalMin, candles) {
-      const r = await fetch("https://api.kraken.com/0/public/OHLC?pair=" + encodeURIComponent(pair) + "&interval=" + intervalMin);
+      const url = "https://api.kraken.com/0/public/OHLC?pair=" + encodeURIComponent(pair) + "&interval=" + intervalMin;
+      const r = await fetch(url);
       const j = await r.json();
-      const k = Object.keys(j.result || {}).find(x => x !== "last");
-      if (!k || !Array.isArray(j.result[k])) return [];
 
-      return j.result[k].slice(-(candles || 60)).map(x => ({
-        time: new Date(x[0] * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+      const k = Object.keys(j.result || {}).find(x => x !== "last");
+      const arr = (k && Array.isArray(j.result[k])) ? j.result[k] : [];
+
+      return arr.slice(-(candles || 60)).map(x => ({
+        time: Number(x[0]),
         open: Number(x[1]),
         high: Number(x[2]),
         low: Number(x[3]),
@@ -1004,493 +293,231 @@
       }));
     }
 
-    function buildModalChart(res) {
-      const src = (res.chartData && res.chartData.length) ? res.chartData : res.data;
-      const prices = src.map(d => d.close);
-      const times = src.map(d => d.time);
+    function decideStrategyOrder(res, currentPrice) {
+      const h1 = res.h1 || [];
+      const h4 = res.h4 || [];
+      const m5 = res.m5 || [];
 
-      const x = prices.map((_, i) => i + 1);
-      const lrP = linearRegression(prices, x);
-      const forecast = Array.from({ length: 5 }, (_, i) => lrP.m * (x.length + i + 1) + lrP.b);
+      const h1Closes = h1.map(x => x.close);
+      const h4Closes = h4.map(x => x.close);
+      const m5Closes = m5.map(x => x.close);
 
-      const rsiHist = [];
-      for (let i = 0; i < prices.length; i++) rsiHist.push(calculateRSI_Wilder(prices.slice(0, i + 1), RSI_PERIOD));
-
-      const rsiX = rsiHist.map((_, i) => i + 1);
-      const lrR = linearRegression(rsiHist, rsiX);
-      const rsiForecast = Array.from({ length: 5 }, (_, i) => lrR.m * (rsiHist.length + i + 1) + lrR.b);
-
-      const entry = res.last;
-      const tp = entry * 1.05;
-      const sl = entry * 0.93;
-
-      const labels = times.concat(["+1h", "+2h", "+3h", "+4h", "+5h"]);
-      const forecastSeries = Array(prices.length).fill(null).concat(forecast);
-      const rsiHistSeries = rsiHist.concat(Array(5).fill(null));
-      const rsiForecastSeries = Array(prices.length).fill(null).concat(rsiForecast);
-
-      if (window.projChart) window.projChart.destroy();
-
-      window.projChart = new Chart(projectionCanvasEl, {
-        type: "line",
-        data: {
-          labels,
-          datasets: [
-            { label: "Price", data: prices.concat(Array(5).fill(null)), borderColor: "#4da3ff", borderWidth: 4, tension: 0.35, pointRadius: 0, yAxisID: "y" },
-            { label: "Forecast", data: forecastSeries, borderColor: "rgba(77,163,255,0.70)", borderWidth: 3, borderDash: [8, 7], tension: 0.35, pointRadius: 0, yAxisID: "y" },
-
-            { label: "RSI", data: rsiHistSeries, borderColor: "#b36bff", borderWidth: 4, tension: 0.25, pointRadius: 0, yAxisID: "y1" },
-            { label: "RSI Forecast", data: rsiForecastSeries, borderColor: "rgba(179,107,255,0.55)", borderWidth: 3, borderDash: [6, 8], tension: 0.25, pointRadius: 0, yAxisID: "y1" },
-
-            { label: "Take Profit", data: Array(labels.length).fill(tp), borderColor: "rgba(0,255,0,0.85)", borderWidth: 3, borderDash: [12, 9], pointRadius: 0, yAxisID: "y" },
-            { label: "Stop Loss", data: Array(labels.length).fill(sl), borderColor: "rgba(255,80,80,0.75)", borderWidth: 3, borderDash: [12, 9], pointRadius: 0, yAxisID: "y" }
-          ]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          devicePixelRatio: 2,
-          interaction: { mode: "index", intersect: false },
-          plugins: {
-            legend: {
-              position: "bottom",
-              labels: {
-                color: "#ffffff",
-                padding: 18,
-                boxWidth: 18,
-                font: { size: 16, weight: "bold" },
-                usePointStyle: true,
-                pointStyle: "line"
-              }
-            },
-            tooltip: {
-              enabled: true,
-              backgroundColor: "rgba(0,0,0,0.92)",
-              titleColor: "#fff",
-              bodyColor: "#fff",
-              borderColor: "rgba(255,255,255,0.18)",
-              borderWidth: 1,
-              titleFont: { size: 15, weight: "bold" },
-              bodyFont: { size: 14 },
-              padding: 12
-            }
-          },
-          scales: {
-            x: {
-              ticks: {
-                color: "#ffffff",
-                font: { size: 14, weight: "bold" },
-                maxRotation: 0,
-                autoSkip: false,
-                callback: function (value, index) {
-                  const step = Math.ceil(labels.length / 7);
-                  return (index % step === 0) ? labels[index] : "";
-                }
-              },
-              grid: { color: "rgba(255,255,255,0.08)" }
-            },
-            y: {
-              title: { display: true, text: "Price", color: "#4da3ff", font: { size: 16, weight: "bold" } },
-              ticks: { color: "#4da3ff", font: { size: 13, weight: "bold" }, callback: v => Number(v).toFixed(6) },
-              grid: { color: "rgba(77,163,255,0.10)" }
-            },
-            y1: {
-              position: "right",
-              min: 20,
-              max: 80,
-              title: { display: true, text: "RSI", color: "#b36bff", font: { size: 16, weight: "bold" } },
-              ticks: { color: "#b36bff", stepSize: 10, font: { size: 13, weight: "bold" } },
-              grid: { drawOnChartArea: false }
-            }
-          }
-        }
-      });
-
-      return { entry, tp, sl };
-    }
-
-    async function computeEstimates(entryPrice, tp, sl) {
-      const d = await getJson(apiUrl("/balance"));
-      const totalZusd = Number(d.balance?.ZUSD || 0);
-      const available = Number(d.tradeBalance?.available ?? totalZusd);
-
-      const amtEl = document.getElementById("tradeAmount");
-      const pctEl = document.getElementById("investSelect");
-
-      const amt = Number(amtEl.value || 0);
-      const pct = Number(pctEl.value || 0);
-
-      const invest = (amt > 0) ? amt : (available * (pct / 100));
-      const qty = invest > 0 ? (invest / entryPrice) : 0;
-
-      const estProfit = (tp - entryPrice) * qty;
-      const estLoss = (entryPrice - sl) * qty;
-
-      return { totalZusd, available, invest, qty, estProfit, estLoss };
-    }
-
-    async function placeOrder(pair, side, price, opts, isAuto) {
-      const tp = Number(document.getElementById("tpInput")?.value || 0);
-      const sl = Number(document.getElementById("slInput")?.value || 0);
-
-      const d = await getJson(apiUrl("/balance"));
-      const totalZusd = Number(d.balance?.ZUSD || 0);
-      const available = Number(d.tradeBalance?.available ?? totalZusd);
-
-      const amt = Number(document.getElementById("tradeAmount")?.value || 0);
-      const pct = Number(document.getElementById("investSelect")?.value || 0);
-      const invest = (amt > 0) ? amt : (available * (pct / 100));
-
-      const payload = {
-        pair,
-        side,
-        orderType: opts.orderType || "limit",
-        price,
-        price2: (opts.price2 === undefined ? null : opts.price2),
-        takeProfit: tp,
-        stopLoss: sl,
-        investUsd: invest,
-        isAuto: isAuto === true
-      };
-
-      try {
-        return await postJson(apiUrl("/trade"), payload);
-      } catch (e) {
-        const msg = String(e.message || "");
-        if (msg.includes("Invalid permissions") || msg.includes("trading restricted")) blockPair(pair);
-        throw e;
-      }
-    }
-
-    async function showStrategyModal(res) {
-      const chartBuilt = buildModalChart(res);
-      const rec = decideStrategyOrder(res, chartBuilt.entry, AGGRESSIVE_MODE);
-
-      modalTitleEl.textContent = prettyPair(res.pair) + " " + res.signal;
-
-      const recLine = rec
-        ? ("<span class='good' style='font-weight:bold; font-size:18px;'>" + rec.actionTitle + "</span><span class='strategyTag'>" + rec.tag + "</span>")
-        : ("<span class='warn' style='font-weight:bold; font-size:18px;'>No trade right now</span>");
-
-      const recDetails = rec
-        ? ("<div class='muted' style='margin-top:6px;'>" + rec.details + "</div>")
-        : ("<div class='muted' style='margin-top:6px;'>Your rules do not see a safe entry. No trade is a valid outcome.</div>");
-
-      const nextLine = rec && rec.next
-        ? ("<div class='profitBox' style='margin-top:12px;'><div class='muted'>What to watch next</div><div style='margin-top:6px; font-weight:bold;'>" + rec.next + "</div></div>")
-        : "";
-
-      modalContentEl.innerHTML =
-        "<div class='profitBox'>" +
-        "<div class='rowFlex'>" +
-        "<div>" +
-        "<div class='muted'>Current price</div><div class='good' style='font-size:18px; font-weight:bold;'>" + chartBuilt.entry.toFixed(6) + "</div>" +
-        "<div class='muted' style='margin-top:8px;'>RSI</div><div class='warn' style='font-size:16px; font-weight:bold;'>" + Number(res.rsi).toFixed(1) + "</div>" +
-        "<div class='muted' style='margin-top:8px;'>Forecast change</div><div class='warn' style='font-size:16px; font-weight:bold;'>" + Number(res.predChange).toFixed(2) + " percent</div>" +
-        "</div>" +
-        "<div>" +
-        "<div class='muted'>Decision</div>" +
-        "<div style='margin-top:2px;'>" + recLine + "</div>" +
-        recDetails +
-        nextLine +
-        "</div>" +
-        "</div>" +
-        "</div>" +
-        "</div>" +
-
-        "<div class='profitBox'>" +
-        "<div class='rowFlex'>" +
-        "<div>" +
-        "<div class='muted'>Take profit</div><input id='tpInput' type='number' value='" + chartBuilt.tp.toFixed(6) + "'>" +
-        "<div class='muted' style='margin-top:10px;'>Stop loss</div><input id='slInput' type='number' value='" + chartBuilt.sl.toFixed(6) + "'>" +
-        "<div class='muted' style='margin-top:10px;'>Trade amount USD</div><input id='tradeAmount' type='number' value='5'>" +
-        "<div class='muted' style='margin-top:10px;'>Or percent of available ZUSD</div>" +
-        "<select id='investSelect'>" +
-        "<option value='10'>10</option>" +
-        "<option value='25'>25</option>" +
-        "<option value='50'>50</option>" +
-        "<option value='100'>100</option>" +
-        "</select>" +
-        "</div>" +
-
-        "<div>" +
-        "<div class='muted'>Strategy order preview</div>" +
-        "<div id='orderPreviewBox' class='profitBox'></div>" +
-        "<div class='muted' style='margin-top:10px;'>Available funds and estimate</div>" +
-        "<div id='estimateBox' class='profitBox'></div>" +
-        "<button id='btnApprove' class='primaryBtn' " + (rec ? "" : "disabled") + ">✅ Approve Strategy</button>" +
-        "<div class='muted' style='margin-top:8px;'>If Kraken says insufficient funds, you probably do not have enough available ZUSD for this pair.</div>" +
-        "</div>" +
-        "</div>" +
-        "</div>";
-
-      openModal();
-
-      const estimateBox = document.getElementById("estimateBox");
-      const orderPreviewBox = document.getElementById("orderPreviewBox");
-      const approveBtn = document.getElementById("btnApprove");
-      const pairInfo = await getPairInfo(res.pair);
-
-      async function refreshEst() {
-        try {
-          const entryPrice = chartBuilt.entry;
-          const tp = Number(document.getElementById("tpInput").value);
-          const sl = Number(document.getElementById("slInput").value);
-
-          const est = await computeEstimates(entryPrice, tp, sl);
-
-          if (orderPreviewBox) {
-            const amt = Number(document.getElementById("tradeAmount").value || 0);
-            const pct = Number(document.getElementById("investSelect").value || 0);
-
-            const modeTxt = (amt > 0) ? "Fixed USD" : ("Percent of available ZUSD " + pct.toFixed(0) + " percent");
-
-            const sideTxt = rec ? String(rec.side).toUpperCase() : "N A";
-            const typeTxt = rec ? String(rec.orderType) : "N A";
-            const priceTxt = rec ? Number(rec.price).toFixed(6) : "0";
-            const price2Txt = (rec && rec.price2 !== undefined && rec.price2 !== null) ? Number(rec.price2).toFixed(6) : "";
-
-            const freshTxt = (rec && rec.fresh === true)
-              ? ("Fresh reclaim " + String(rec.freshBarsAgo) + " bars ago")
-              : "Not fresh";
-
-            orderPreviewBox.innerHTML =
-              "<div class='muted'>Mode</div><div style='font-weight:bold;'>" + modeTxt + "</div>" +
-              "<div class='muted' style='margin-top:8px;'>Side and type</div><div style='font-weight:bold;'>" + sideTxt + " " + typeTxt + "</div>" +
-              "<div class='muted' style='margin-top:8px;'>Freshness</div><div class='muted' style='font-weight:bold;'>" + freshTxt + "</div>" +
-              "<div class='muted' style='margin-top:8px;'>Buy amount</div><div class='warn' style='font-weight:bold; font-size:16px;'>" + est.invest.toFixed(2) + " USD</div>" +
-              "<div class='muted' style='margin-top:8px;'>Estimated quantity</div><div class='muted' style='font-weight:bold;'>" + est.qty.toFixed(6) + "</div>" +
-              "<div class='muted' style='margin-top:8px;'>Entry trigger</div><div class='good' style='font-weight:bold;'>" + priceTxt + "</div>" +
-              (price2Txt ? "<div class='muted' style='margin-top:8px;'>Entry limit</div><div class='good' style='font-weight:bold;'>" + price2Txt + "</div>" : "");
-          }
-
-          const minUsd = calcMinUsd(pairInfo, entryPrice);
-          const tooSmall = (minUsd > 0 && est.invest > 0 && est.invest < minUsd);
-          const overAvail = (est.invest > est.available);
-
-          estimateBox.innerHTML =
-            "<div class='muted'>Available ZUSD</div><div class='good' style='font-weight:bold; font-size:16px;'>" + est.available.toFixed(4) + "</div>" +
-            "<div class='muted' style='margin-top:6px;'>Total ZUSD</div><div class='muted' style='font-weight:bold; font-size:14px;'>" + est.totalZusd.toFixed(4) + "</div>" +
-            "<div class='muted' style='margin-top:8px;'>Buy amount</div><div class='" + (overAvail ? "bad" : (tooSmall ? "bad" : "warn")) + "' style='font-weight:bold; font-size:16px;'>" + est.invest.toFixed(2) + "</div>" +
-            (minUsd > 0
-              ? "<div class='muted' style='margin-top:8px;'>Minimum for this pair</div><div class='" + (tooSmall ? "bad" : "muted") + "' style='font-weight:bold; font-size:14px;'>" + minUsd.toFixed(2) + " USD</div>"
-              : "") +
-            "<div class='muted' style='margin-top:8px;'>Estimated profit at TP</div><div class='good' style='font-weight:bold; font-size:16px;'>" + est.estProfit.toFixed(4) + " USD</div>" +
-            "<div class='muted' style='margin-top:8px;'>Estimated loss at SL</div><div class='bad' style='font-weight:bold; font-size:16px;'>" + est.estLoss.toFixed(4) + " USD</div>" +
-            "<div class='muted' style='margin-top:6px;'>Estimates ignore fees and slippage.</div>" +
-            (tooSmall ? "<div class='bad' style='margin-top:10px; font-weight:bold;'>Buy amount is below minimum. Increase to at least " + minUsd.toFixed(2) + " USD.</div>" : "") +
-            (overAvail ? "<div class='bad' style='margin-top:10px; font-weight:bold;'>Buy amount is above available ZUSD. If your funds are in another asset, convert to USD or use a matching pair.</div>" : "");
-
-          if (approveBtn) {
-            approveBtn.disabled = (!rec) || tooSmall || (est.invest <= 0) || overAvail;
-          }
-        } catch {
-          estimateBox.innerHTML = "<div class='bad'>Unable to load estimate</div>";
-          if (approveBtn) approveBtn.disabled = true;
-        }
+      if (h1Closes.length < 220 || h4Closes.length < 220 || m5Closes.length < 60) {
+        return { quality: 0, tag: "Not enough data", side: null };
       }
 
-      document.getElementById("tpInput").addEventListener("input", refreshEst);
-      document.getElementById("slInput").addEventListener("input", refreshEst);
-      document.getElementById("tradeAmount").addEventListener("input", refreshEst);
-      document.getElementById("investSelect").addEventListener("change", refreshEst);
-
-      await refreshEst();
-
-      if (approveBtn) {
-        approveBtn.addEventListener("click", async () => {
-          if (!rec) return;
-
-          approveBtn.disabled = true;
-          approveBtn.textContent = "Sending order...";
-
-          try {
-            const d = await getJson(apiUrl("/balance"));
-            const totalZusd = Number(d.balance?.ZUSD || 0);
-            const available = Number(d.tradeBalance?.available ?? totalZusd);
-
-            const amt = Number(document.getElementById("tradeAmount").value || 0);
-            const pct = Number(document.getElementById("investSelect").value || 0);
-            const invest = (amt > 0) ? amt : (available * (pct / 100));
-
-            const minUsd = calcMinUsd(pairInfo, chartBuilt.entry);
-            if (minUsd > 0 && invest < minUsd) {
-              alert("Minimum for this pair is " + minUsd.toFixed(2) + " USD. Increase buy amount.");
-              approveBtn.disabled = false;
-              approveBtn.textContent = "✅ Approve Strategy";
-              return;
-            }
-
-            if (invest > available) {
-              alert("Not enough available ZUSD. Available " + available.toFixed(4) + " Invest " + invest.toFixed(2));
-              approveBtn.disabled = false;
-              approveBtn.textContent = "✅ Approve Strategy";
-              return;
-            }
-
-            const result = await placeOrder(res.pair, rec.side, rec.price, { orderType: rec.orderType, price2: rec.price2 }, false);
-            alert(String(result?.message || "Order sent"));
-            await refreshUsdQuick();
-            closeModal();
-          } catch (e) {
-            const p = e.payload || {};
-            if (p && p.hint) alert(String(p.hint));
-            else alert(String(e.message || "Order failed"));
-            approveBtn.disabled = false;
-            approveBtn.textContent = "✅ Approve Strategy";
-          }
-        });
+      const ema200H1 = ema(h1Closes, 200);
+      const ema200H4 = ema(h4Closes, 200);
+      if (!Number.isFinite(ema200H1) || !Number.isFinite(ema200H4)) {
+        return { quality: 0, tag: "EMA not ready", side: null };
       }
+
+      const lastH1 = h1Closes[h1Closes.length - 1];
+      const lastH4 = h4Closes[h4Closes.length - 1];
+
+      const upBias = lastH1 > ema200H1 && lastH4 > ema200H4;
+      const downBias = lastH1 < ema200H1 && lastH4 < ema200H4;
+
+      const m5Ema20 = ema(m5Closes, 20);
+      const m5Vwap = vwapFromCandles(m5);
+
+      if (!Number.isFinite(m5Ema20) || !Number.isFinite(m5Vwap)) {
+        return { quality: 0, tag: "M5 indicators missing", side: null };
+      }
+
+      const lastM5 = m5Closes[m5Closes.length - 1];
+      const prevM5 = m5Closes[m5Closes.length - 2];
+
+      const aboveEma = lastM5 > m5Ema20;
+      const aboveVwap = lastM5 > m5Vwap;
+      const reclaimLong = (prevM5 <= m5Ema20 || prevM5 <= m5Vwap) && (aboveEma && aboveVwap);
+
+      const belowEma = lastM5 < m5Ema20;
+      const belowVwap = lastM5 < m5Vwap;
+      const reclaimShort = (prevM5 >= m5Ema20 || prevM5 >= m5Vwap) && (belowEma && belowVwap);
+
+      if (!upBias && !downBias) return { quality: 0, tag: "Chop zone", side: null };
+
+      if (upBias && reclaimLong) {
+        const entry = currentPrice;
+        const swingLow = approxPullbackSwingLow(m5Closes, 12);
+        const stop = swingLow ? (swingLow * 0.999) : (entry * 0.992);
+        const r = entry - stop;
+        const tp = entry + (r * 2.0);
+
+        return {
+          quality: 85,
+          tag: "Trend pullback reclaim",
+          actionTitle: "Buy after pullback confirms",
+          side: "buy",
+          orderType: "limit",
+          price: entry,
+          stopLoss: stop,
+          takeProfit: tp
+        };
+      }
+
+      if (downBias && reclaimShort) {
+        const entry = currentPrice;
+        const swingHigh = approxPullbackSwingHigh(m5Closes, 12);
+        const stop = swingHigh ? (swingHigh * 1.001) : (entry * 1.008);
+        const r = stop - entry;
+        const tp = entry - (r * 2.0);
+
+        return {
+          quality: 82,
+          tag: "Trend pullback reclaim",
+          actionTitle: "Sell after pullback confirms",
+          side: "sell",
+          orderType: "limit",
+          price: entry,
+          stopLoss: stop,
+          takeProfit: tp
+        };
+      }
+
+      return { quality: 0, tag: "No reclaim yet", side: null };
     }
 
-    async function analyze() {
-      if (loggedOut) return;
+    function openStrategy(pair) {
+      const url = "/strategy.html?pair=" + encodeURIComponent(pair);
+      window.open(url, "_blank", "noopener");
+    }
 
-      tableBodyEl.innerHTML = "";
-      safeListEl.textContent = "Loading...";
-      alertBoxEl.textContent = "Ranking pairs by 24h volume...";
+    async function refreshHeader() {
+      const bal = await getJson(apiUrl("/balance"));
+      const usd = Number(bal.balance && bal.balance.ZUSD ? bal.balance.ZUSD : 0);
+      document.getElementById("usdBal").textContent = usd.toFixed(4);
+      document.getElementById("updated").textContent = new Date().toLocaleTimeString();
+    }
 
-      let pairs = [];
-      try {
-        const allPairs = await getAllUsdPairs();
-        const filtered = allPairs.filter(p => !blockedPairs.has(p));
-        pairs = await getTopPairsByVolumeUsd(filtered, MAX_SCAN_PAIRS);
-      } catch (e) {
-        alertBoxEl.textContent = "Failed to load pairs. " + String(e.message || e);
-        safeListEl.textContent = "Unable to scan right now.";
-        return;
-      }
+    async function refreshStatus() {
+      const box = document.getElementById("statusBox");
+
+      let account = { krakenConnected: false, emailVerified: false };
+      let mode = { simulator: false };
+
+      try { account = await getJson(apiUrl("/api/account/status")); } catch {}
+      try { mode = await getJson(apiUrl("/mode")); } catch {}
+
+      box.innerHTML =
+        "<div class='kvRow'><span class='muted'>Email verified</span><span class='" + (account.emailVerified ? "good" : "bad") + "' style='font-weight:bold;'>" + (account.emailVerified ? "Yes" : "No") + "</span></div>" +
+        "<div class='kvRow'><span class='muted'>Kraken connected</span><span class='" + (account.krakenConnected ? "good" : "bad") + "' style='font-weight:bold;'>" + (account.krakenConnected ? "Yes" : "No") + "</span></div>" +
+        "<div class='kvRow'><span class='muted'>Mode</span><span class='warn' style='font-weight:bold;'>" + (mode.simulator ? "Simulator" : "Live") + "</span></div>";
+    }
+
+    async function scanOnce() {
+      const status = document.getElementById("scanStatus");
+      const safeBody = document.getElementById("safeBody");
+
+      const maxPairs = Math.max(5, Math.min(200, Number(document.getElementById("maxPairs").value || 30)));
+      const minQuality = Math.max(0, Math.min(100, Number(document.getElementById("minQuality").value || 80)));
+      const topSend = Math.max(1, Math.min(50, Number(document.getElementById("topSend").value || 10)));
+
+      safeBody.innerHTML = "";
+      status.textContent = "Loading pairs and market data...";
+
+      const allPairs = await getAllUsdPairs();
+      const topPairs = await getTopPairsByVolumeUsd(allPairs, maxPairs);
 
       const results = [];
+      let done = 0;
 
-      for (const p of pairs) {
+      for (const p of topPairs) {
+        done += 1;
+        status.textContent = "Scanning " + done + " of " + topPairs.length + "  " + prettyPair(p);
+
         try {
-          const h1 = await fetchOHLC(p, H1_INTERVAL_MIN, H1_CANDLES);
-          const h4 = await fetchOHLC(p, H4_INTERVAL_MIN, H4_CANDLES);
-          const m5 = await fetchOHLC(p, M5_INTERVAL_MIN, M5_CANDLES);
+          const [h1, h4, m5] = await Promise.all([
+            fetchOHLC(p, 60, 260),
+            fetchOHLC(p, 240, 260),
+            fetchOHLC(p, 5, 120)
+          ]);
 
-          if (h1.length < RSI_PERIOD + 1) continue;
-          if (h1.length < 220 || h4.length < 220 || m5.length < 60) continue;
+          const last = m5.length ? m5[m5.length - 1].close : (h1.length ? h1[h1.length - 1].close : 0);
+          const rowObj = { pair: p, h1, h4, m5, last };
+          rowObj.recommended = decideStrategyOrder(rowObj, last);
 
-          const closes = h1.map(x => x.close);
-          const rsi = calculateRSI_Wilder(closes, RSI_PERIOD);
-
-          const x = closes.map((_, i) => i + 1);
-          const lr = linearRegression(closes, x);
-
-          const forecast = Array.from({ length: 5 }, (_, i) => lr.m * (x.length + i + 1) + lr.b);
-          const predChange = ((forecast[forecast.length - 1] - closes[closes.length - 1]) / closes[closes.length - 1]) * 100;
-
-          const rowObj = {
-            pair: p,
-            chartData: h1,
-            data: h1.slice(-10),
-            last: closes[closes.length - 1],
-            rsi,
-            predChange,
-            score: buildScore(predChange, lr.m, rsi),
-            signal: (rsi > 60 && predChange > 3) ? "🚀 Strong Buy" : "⏸ Neutral",
-            slope: lr.m,
-            prices: closes,
-            rsiHist: closes.map((_, i) => calculateRSI_Wilder(closes.slice(0, i + 1), RSI_PERIOD)),
-            h1,
-            h4,
-            m5
-          };
-
-          rowObj.recommended = decideStrategyOrder(rowObj, rowObj.last, AGGRESSIVE_MODE);
-
-          results.push(rowObj);
-        } catch (e) {
-          console.error("Analyze failed for pair", p, e);
+          if (rowObj.recommended && Number(rowObj.recommended.quality || 0) >= minQuality) {
+            results.push(rowObj);
+          }
+        } catch {
         }
       }
 
-      const top10 = results
-        .filter(r => r.predChange > 0)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 10);
+      results.sort((a, b) => Number(b.recommended.quality || 0) - Number(a.recommended.quality || 0));
+      const toShow = results.slice(0, topSend);
 
-      alertBoxEl.textContent = "Top 10 momentum coins ranked by score. Updated " + new Date().toLocaleTimeString();
-
-      for (const r of top10) {
-        const row = document.createElement("tr");
-        if (r.predChange > 8) row.classList.add("highlightRow");
-
-        row.innerHTML =
-          "<td>" + prettyPair(r.pair) + "</td>" +
-          "<td>" + r.last.toFixed(6) + "</td>" +
-          "<td style='color:" + (r.predChange > 0 ? "lightgreen" : "red") + ";'>" + r.predChange.toFixed(2) + "%</td>" +
-          "<td>" + r.rsi.toFixed(1) + "</td>" +
-          "<td>" + r.score.toFixed(2) + "</td>" +
-          "<td class='" + (r.signal.includes("Strong") ? "strongBuy" : "neutral") + "'>" + r.signal + "</td>";
-
-        row.addEventListener("click", () => showStrategyModal(r));
-        tableBodyEl.appendChild(row);
-      }
-
-      const safeTrades = results
-        .filter(r => {
-          const rec = r.recommended;
-          if (!rec) return false;
-          if ((rec.quality || 0) < 80) return false;
-          if (rec.side !== "buy" && rec.side !== "sell") return false;
-          if (rec.fresh !== true) return false;
-          return true;
-        })
-        .sort((a, b) => (b.recommended.quality || 0) - (a.recommended.quality || 0))
-        .slice(0, 3);
-
-      try { await postJson(apiUrl("/api/alerts/safest"), { safeTrades }); } catch { }
-
-      safeListEl.innerHTML = "";
-
-      if (!safeTrades.length) {
-        safeListEl.innerHTML = "<div class='muted'>No fresh reclaim setups right now.</div>";
+      if (!toShow.length) {
+        status.textContent = "No actionable safe trades right now";
         return;
       }
 
-      for (const r of safeTrades) {
-        const item = document.createElement("div");
-        item.className = "safeTrade";
+      for (const t of toShow) {
+        const rec = t.recommended || {};
+        const tr = document.createElement("tr");
+        tr.className = "clickable";
 
-        const tag = r.recommended.tag;
-        const action = r.recommended.actionTitle;
-        const barsAgo = (r.recommended && r.recommended.freshBarsAgo !== null && r.recommended.freshBarsAgo !== undefined)
-          ? ("Fresh " + String(r.recommended.freshBarsAgo) + " bars ago")
-          : "Fresh";
+        tr.innerHTML =
+          "<td>" + prettyPair(t.pair) + "</td>" +
+          "<td class='" + (String(rec.side) === "buy" ? "good" : "bad") + "' style='font-weight:bold;'>" + String(rec.side || "").toUpperCase() + "</td>" +
+          "<td class='warn' style='font-weight:bold;'>" + String(rec.quality || 0) + "</td>" +
+          "<td>" + round6(rec.price ?? t.last ?? 0) + "</td>" +
+          "<td>" + round6(rec.takeProfit ?? 0) + "</td>" +
+          "<td>" + round6(rec.stopLoss ?? 0) + "</td>" +
+          "<td class='muted'>" + String(rec.tag || "") + "</td>";
 
-        item.innerHTML =
-          "<span style='min-width:160px; font-weight:bold;'>" + prettyPair(r.pair) + "</span>" +
-          "<span class='muted' style='flex:1 1 auto;'>" + action + "</span>" +
-          "<span class='safeTag'>" + tag + "</span>" +
-          "<span class='safeTag'>" + barsAgo + "</span>" +
-          "<span class='safeBadge'>Q " + (r.recommended.quality || 0) + "</span>";
+        tr.addEventListener("click", () => openStrategy(t.pair));
+        safeBody.appendChild(tr);
+      }
 
-        item.addEventListener("click", () => showStrategyModal(r));
-        safeListEl.appendChild(item);
+      status.textContent = "Scan complete. Click any row to open strategy.";
+
+      try {
+        await postJson("/api/alerts/safest", { safeTrades: toShow });
+      } catch {
       }
     }
 
-    document.getElementById("aggressiveToggle")?.addEventListener("change", (e) => {
-      AGGRESSIVE_MODE = !!e.target.checked;
-      localStorage.setItem("AGGRESSIVE_MODE", String(AGGRESSIVE_MODE));
-      setAggressiveUi();
-      analyze();
+    document.getElementById("btnScan").addEventListener("click", async () => {
+      try {
+        await refreshHeader();
+        await scanOnce();
+      } catch (e) {
+        document.getElementById("scanStatus").textContent = String(e.message || e);
+      }
     });
 
-    (async () => {
-      setAggressiveUi();
-      await ensureLoggedIn();
-      await checkKrakenConnectedAndToggle();
+    document.getElementById("btnAuto").addEventListener("click", async () => {
+      autoOn = !autoOn;
+      const btn = document.getElementById("btnAuto");
+      btn.textContent = autoOn ? "Auto scan off" : "Auto scan on";
 
-      await refreshMode();
-      await refreshUsdQuick();
-      await analyze();
+      if (autoTimer) {
+        clearInterval(autoTimer);
+        autoTimer = null;
+      }
 
-      startIntervals();
+      if (autoOn) {
+        autoTimer = setInterval(async () => {
+          try {
+            await refreshHeader();
+            await scanOnce();
+          } catch {
+          }
+        }, 5 * 60 * 1000);
+      }
+    });
+
+    document.getElementById("btnLogout").addEventListener("click", async () => {
+      try { await postJson("/api/logout", {}); } catch {}
+      window.location.replace("/login.html");
+    });
+
+    (async function init() {
+      await refreshStatus();
+      await refreshHeader();
     })();
   </script>
 </body>
-
 </html>
