@@ -6,25 +6,25 @@
   <title>Strategy</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
-    body { font-family: Arial, sans-serif; background-color: #0d1117; color: #e6edf3; margin: 0; padding: 18px; }
-    h2 { color: #58a6ff; margin: 6px 0 12px 0; text-align: center; }
-    .wrap { width: 92%; max-width: 1100px; margin: 0 auto; }
-    .topBar { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
-    .pill { background: #161b22; border: 2px solid #30363d; padding: 10px 12px; border-radius: 10px; color: #e6edf3; display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-    a.linkBtn, button.linkBtn { text-decoration: none; background: #58a6ff; color: #fff; font-weight: bold; border-radius: 10px; padding: 10px 14px; display: inline-block; border: none; cursor: pointer; }
-    #statusBox { background-color: #161b22; border: 2px solid #30363d; padding: 12px; border-radius: 10px; margin: 10px 0; }
-    .muted { color: #8b949e; font-size: 12px; }
-    canvas { width: 100%; height: 460px !important; margin-top: 10px; }
-    .profitBox { border: 1px solid #30363d; background-color: #0d1117; border-radius: 10px; padding: 12px; margin-top: 12px; }
-    .rowFlex { display: flex; gap: 12px; flex-wrap: wrap; }
-    .rowFlex > div { flex: 1 1 260px; }
-    input, select { border-radius: 6px; border: 1px solid #30363d; background: #0d1117; color: #e6edf3; padding: 6px 8px; width: 100%; box-sizing: border-box; }
-    button.primaryBtn { width: 100%; border: none; border-radius: 10px; padding: 14px 16px; font-weight: bold; cursor: pointer; background: #58a6ff; color: #fff; margin-top: 10px; font-size: 16px; }
-    button.primaryBtn:disabled { opacity: 0.45; cursor: not-allowed; }
-    .strategyTag { display: inline-block; padding: 4px 10px; border-radius: 999px; border: 1px solid #30363d; background: #0d1117; color: #e6edf3; font-size: 12px; margin-left: 8px; vertical-align: middle; }
-    .good { color: lightgreen; }
-    .warn { color: #ffcc00; }
-    .bad { color: #ff5555; }
+    body { font-family: Arial, sans-serif; background-color: #0d1117; color:#e6edf3; margin:0; padding:18px; }
+    h2 { color:#58a6ff; margin:6px 0 12px 0; text-align:center; }
+    .wrap { width:92%; max-width:1100px; margin:0 auto; }
+    .topBar { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+    .pill { background:#161b22; border:2px solid #30363d; padding:10px 12px; border-radius:10px; color:#e6edf3; display:inline-flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    a.linkBtn, button.linkBtn { text-decoration:none; background:#58a6ff; color:#fff; font-weight:bold; border-radius:10px; padding:10px 14px; display:inline-block; border:none; cursor:pointer; }
+    #statusBox { background-color:#161b22; border:2px solid #30363d; padding:12px; border-radius:10px; margin:10px 0; }
+    .muted { color:#8b949e; font-size:12px; }
+    canvas { width:100%; height:520px !important; margin-top:10px; }
+    .profitBox { border:1px solid #30363d; background-color:#0d1117; border-radius:10px; padding:12px; margin-top:12px; }
+    .rowFlex { display:flex; gap:12px; flex-wrap:wrap; }
+    .rowFlex > div { flex:1 1 260px; }
+    input, select { border-radius:6px; border:1px solid #30363d; background:#0d1117; color:#e6edf3; padding:6px 8px; width:100%; box-sizing:border-box; }
+    button.primaryBtn { width:100%; border:none; border-radius:10px; padding:14px 16px; font-weight:bold; cursor:pointer; background:#58a6ff; color:#fff; margin-top:10px; font-size:16px; }
+    button.primaryBtn:disabled { opacity:0.45; cursor:not-allowed; }
+    .strategyTag { display:inline-block; padding:4px 10px; border-radius:999px; border:1px solid #30363d; background:#0d1117; color:#e6edf3; font-size:12px; margin-left:8px; vertical-align:middle; }
+    .good { color:lightgreen; }
+    .warn { color:#ffcc00; }
+    .bad { color:#ff5555; }
   </style>
 </head>
 
@@ -59,7 +59,12 @@
 
     const H1_CANDLES = 260;
     const H4_CANDLES = 260;
-    const M5_CANDLES = 180;
+    const M5_CANDLES = 220;
+
+    const WINDOW_HOURS_PAST = 4;
+    const WINDOW_HOURS_FWD = 4;
+    const WINDOW_BARS_PAST = Math.floor((WINDOW_HOURS_PAST * 60) / M5_INTERVAL_MIN);
+    const WINDOW_BARS_FWD = Math.floor((WINDOW_HOURS_FWD * 60) / M5_INTERVAL_MIN);
 
     let AGGRESSIVE_MODE = String(localStorage.getItem("AGGRESSIVE_MODE") || "false").toLowerCase() === "true";
 
@@ -219,9 +224,7 @@
       const n = Math.max(3, Number(lookbackBars || 10));
       if (!Array.isArray(closes) || closes.length < n) return null;
       let m = Infinity;
-      for (let i = closes.length - n; i < closes.length; i++) {
-        m = Math.min(m, closes[i]);
-      }
+      for (let i = closes.length - n; i < closes.length; i++) m = Math.min(m, closes[i]);
       return Number.isFinite(m) ? m : null;
     }
 
@@ -229,9 +232,7 @@
       const n = Math.max(3, Number(lookbackBars || 10));
       if (!Array.isArray(closes) || closes.length < n) return null;
       let m = -Infinity;
-      for (let i = closes.length - n; i < closes.length; i++) {
-        m = Math.max(m, closes[i]);
-      }
+      for (let i = closes.length - n; i < closes.length; i++) m = Math.max(m, closes[i]);
       return Number.isFinite(m) ? m : null;
     }
 
@@ -423,8 +424,7 @@
           price: entry,
           quality: q,
           explain: explainBase,
-          next:
-            "Stop is placed beyond the pullback swing low. Take profit is based on your risk distance, not a random percent.",
+          next: "Stop is placed beyond the pullback swing low. Take profit is based on your risk distance, not a random percent.",
           stopLoss: stop,
           takeProfit: tp,
           fresh: true,
@@ -486,8 +486,7 @@
           price: entry,
           quality: q,
           explain: explainBase,
-          next:
-            "Stop is placed beyond the pullback swing high. Take profit is based on your risk distance, not a random percent.",
+          next: "Stop is placed beyond the pullback swing high. Take profit is based on your risk distance, not a random percent.",
           stopLoss: stop,
           takeProfit: tp,
           fresh: true,
@@ -533,6 +532,7 @@
 
       return j.result[k].slice(-(candles || 60)).map(x => ({
         time: new Date(x[0] * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+        ts: Number(x[0]) * 1000,
         open: Number(x[1]),
         high: Number(x[2]),
         low: Number(x[3]),
@@ -541,51 +541,66 @@
       }));
     }
 
-    function buildChart(h1Candles) {
-      const prices = h1Candles.map(d => d.close);
-      const times = h1Candles.map(d => d.time);
+    function buildChartFromM5(m5Candles) {
+      const past = m5Candles.slice(-WINDOW_BARS_PAST);
+      const prices = past.map(d => d.close);
+      const times = past.map(d => d.time);
 
       const x = prices.map((_, i) => i + 1);
       const lrP = linearRegression(prices, x);
-      const forecast = Array.from({ length: 5 }, (_, i) => lrP.m * (x.length + i + 1) + lrP.b);
+
+      const forecast = Array.from({ length: WINDOW_BARS_FWD }, (_, i) => lrP.m * (x.length + i + 1) + lrP.b);
 
       const rsiHist = [];
       for (let i = 0; i < prices.length; i++) rsiHist.push(calculateRSI_Wilder(prices.slice(0, i + 1), RSI_PERIOD));
 
       const rsiX = rsiHist.map((_, i) => i + 1);
       const lrR = linearRegression(rsiHist, rsiX);
-      const rsiForecast = Array.from({ length: 5 }, (_, i) => lrR.m * (rsiHist.length + i + 1) + lrR.b);
+      const rsiForecast = Array.from({ length: WINDOW_BARS_FWD }, (_, i) => lrR.m * (rsiHist.length + i + 1) + lrR.b);
 
       const entry = prices[prices.length - 1];
       const tp = entry * 1.05;
       const sl = entry * 0.93;
 
-      const labels = times.concat(["+1h", "+2h", "+3h", "+4h", "+5h"]);
-      const forecastSeries = Array(prices.length).fill(null).concat(forecast);
-      const rsiHistSeries = rsiHist.concat(Array(5).fill(null));
-      const rsiForecastSeries = Array(prices.length).fill(null).concat(rsiForecast);
+      const futureLabels = [];
+      for (let i = 1; i <= WINDOW_BARS_FWD; i++) {
+        const minutes = i * M5_INTERVAL_MIN;
+        if (minutes % 60 === 0) futureLabels.push("+" + (minutes / 60) + "h");
+        else futureLabels.push("+" + minutes + "m");
+      }
+
+      const labels = times.concat(futureLabels);
+
+      const priceSeries = prices.concat(new Array(WINDOW_BARS_FWD).fill(null));
+      const forecastSeries = new Array(prices.length).fill(null).concat(forecast);
+
+      const rsiHistSeries = rsiHist.concat(new Array(WINDOW_BARS_FWD).fill(null));
+      const rsiForecastSeries = new Array(prices.length).fill(null).concat(rsiForecast);
 
       if (window.projChart) window.projChart.destroy();
+
+      const showEvery = Math.max(1, Math.floor(labels.length / 8));
 
       window.projChart = new Chart(projectionCanvasEl, {
         type: "line",
         data: {
           labels,
           datasets: [
-            { label: "Price", data: prices.concat(Array(5).fill(null)), borderColor: "#4da3ff", borderWidth: 4, tension: 0.35, pointRadius: 0, yAxisID: "y" },
+            { label: "Price", data: priceSeries, borderColor: "#4da3ff", borderWidth: 4, tension: 0.35, pointRadius: 0, yAxisID: "y" },
             { label: "Forecast", data: forecastSeries, borderColor: "rgba(77,163,255,0.70)", borderWidth: 3, borderDash: [8, 7], tension: 0.35, pointRadius: 0, yAxisID: "y" },
 
             { label: "RSI", data: rsiHistSeries, borderColor: "#b36bff", borderWidth: 4, tension: 0.25, pointRadius: 0, yAxisID: "y1" },
             { label: "RSI Forecast", data: rsiForecastSeries, borderColor: "rgba(179,107,255,0.55)", borderWidth: 3, borderDash: [6, 8], tension: 0.25, pointRadius: 0, yAxisID: "y1" },
 
-            { label: "Take Profit", data: Array(labels.length).fill(tp), borderColor: "rgba(0,255,0,0.85)", borderWidth: 3, borderDash: [12, 9], pointRadius: 0, yAxisID: "y" },
-            { label: "Stop Loss", data: Array(labels.length).fill(sl), borderColor: "rgba(255,80,80,0.75)", borderWidth: 3, borderDash: [12, 9], pointRadius: 0, yAxisID: "y" }
+            { label: "Take Profit", data: new Array(labels.length).fill(tp), borderColor: "rgba(0,255,0,0.65)", borderWidth: 2, borderDash: [10, 8], pointRadius: 0, yAxisID: "y" },
+            { label: "Stop Loss", data: new Array(labels.length).fill(sl), borderColor: "rgba(255,80,80,0.60)", borderWidth: 2, borderDash: [10, 8], pointRadius: 0, yAxisID: "y" }
           ]
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
-          devicePixelRatio: 2,
+          devicePixelRatio: 3,
+          animation: false,
           interaction: { mode: "index", intersect: false },
           plugins: {
             legend: {
@@ -615,34 +630,33 @@
             x: {
               ticks: {
                 color: "#ffffff",
-                font: { size: 14, weight: "bold" },
+                font: { size: 15, weight: "bold" },
                 maxRotation: 0,
                 autoSkip: false,
                 callback: function (value, index) {
-                  const step = Math.ceil(labels.length / 7);
-                  return (index % step === 0) ? labels[index] : "";
+                  return (index % showEvery === 0) ? labels[index] : "";
                 }
               },
-              grid: { color: "rgba(255,255,255,0.08)" }
+              grid: { color: "rgba(255,255,255,0.10)" }
             },
             y: {
               title: { display: true, text: "Price", color: "#4da3ff", font: { size: 16, weight: "bold" } },
-              ticks: { color: "#4da3ff", font: { size: 13, weight: "bold" }, callback: v => Number(v).toFixed(6) },
-              grid: { color: "rgba(77,163,255,0.10)" }
+              ticks: { color: "#4da3ff", font: { size: 14, weight: "bold" }, callback: v => Number(v).toFixed(6) },
+              grid: { color: "rgba(77,163,255,0.12)" }
             },
             y1: {
               position: "right",
               min: 20,
               max: 80,
               title: { display: true, text: "RSI", color: "#b36bff", font: { size: 16, weight: "bold" } },
-              ticks: { color: "#b36bff", stepSize: 10, font: { size: 13, weight: "bold" } },
+              ticks: { color: "#b36bff", stepSize: 10, font: { size: 14, weight: "bold" } },
               grid: { drawOnChartArea: false }
             }
           }
         }
       });
 
-      return { entry, tp, sl };
+      return { entry, tp, sl, pastPrices: prices };
     }
 
     async function computeEstimates(entryPrice, tp, sl) {
@@ -712,10 +726,15 @@
         return;
       }
 
-      const chartBuilt = buildChart(h1);
+      if (m5.length < WINDOW_BARS_PAST + RSI_PERIOD + 2) {
+        statusBoxEl.textContent = "Not enough recent 5 minute candles to build the 4 hour view yet.";
+        return;
+      }
 
-      const h1Closes = h1.map(x => x.close);
-      const rsi = calculateRSI_Wilder(h1Closes, RSI_PERIOD);
+      const chartBuilt = buildChartFromM5(m5);
+
+      const closesForRsi = m5.slice(-WINDOW_BARS_PAST).map(x => x.close);
+      const rsi = calculateRSI_Wilder(closesForRsi, RSI_PERIOD);
 
       const res = {
         pair,
@@ -732,7 +751,7 @@
 
       statusBoxEl.innerHTML =
         "<div style='font-weight:bold;'>" + prettyPair(pair) + "</div>" +
-        "<div class='muted' style='margin-top:6px;'>Open from Telegram or dashboard, same strategy screen every time.</div>";
+        "<div class='muted' style='margin-top:6px;'>Chart shows 4 hours back plus 4 hours forecast ahead.</div>";
 
       const recLine = rec
         ? ("<span class='good' style='font-weight:bold; font-size:18px;'>" + rec.actionTitle + "</span><span class='strategyTag'>" + rec.tag + "</span>")
@@ -740,7 +759,7 @@
 
       const recDetails = rec
         ? ("<div class='muted' style='margin-top:6px;'>" + rec.details + "</div>")
-        : ("<div class='muted' style='margin-top:6px;'>Your rules do not see a safe entry. No trade is a valid outcome.</div>");
+        : ("<div class='muted' style='margin-top:6px;'>Your rules do not see a safe entry.</div>");
 
       const nextLine = rec && rec.next
         ? ("<div class='profitBox' style='margin-top:12px;'><div class='muted'>What to watch next</div><div style='margin-top:6px; font-weight:bold;'>" + rec.next + "</div></div>")
@@ -925,3 +944,4 @@
 </body>
 
 </html>
+s
