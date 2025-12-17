@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
+import fs from "fs";
 import sqlite3 from "sqlite3";
 import bcrypt from "bcrypt";
 import cookieParser from "cookie-parser";
@@ -41,6 +42,8 @@ if (!ENC_KEY || ENC_KEY.length !== 32) {
 
 const DB_PATH = process.env.DB_PATH || "./app.db";
 const db = new sqlite3.Database(DB_PATH);
+
+const SAFE_TRADES_FILE = process.env.SAFE_TRADES_FILE || "./latest_safe_trades.json";
 
 function dbRun(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -168,6 +171,39 @@ function trimNumberString(s) {
   const str = String(s);
   if (!str.includes(".")) return str;
   return str.replace(/\.?0+$/, "");
+}
+
+async function krakenApiWithNonceRetry(client, method, params) {
+  try {
+    return await client.api(method, params);
+  } catch (err) {
+    const msg = String(err?.message || err || "").toLowerCase();
+    if (msg.includes("invalid nonce")) {
+      await new Promise(r => setTimeout(r, 300));
+      return await client.api(method, params);
+    }
+    throw err;
+  }
+}
+
+function readSafeTradesFile() {
+  try {
+    const raw = fs.readFileSync(SAFE_TRADES_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed?.safeTrades)) return { ts: 0, safeTrades: [] };
+    const ts = numOrNull(parsed.ts) ?? 0;
+    return { ts, safeTrades: parsed.safeTrades };
+  } catch {
+    return { ts: 0, safeTrades: [] };
+  }
+}
+
+function writeSafeTradesFile(safeTrades) {
+  try {
+    const payload = { ts: Date.now(), safeTrades: Array.isArray(safeTrades) ? safeTrades : [] };
+    fs.writeFileSync(SAFE_TRADES_FILE, JSON.stringify(payload, null, 2), "utf8");
+  } catch {
+  }
 }
 
 const pairMetaCache = new Map();
@@ -573,8 +609,28 @@ app.get("/balance", authRequired, async (req, res) => {
     const client = await getUserKrakenClient(req.user.uid);
     if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
 
-    const balance = await client.api("Balance");
-    res.json({ status: "Connected", balance: balance.result });
+    const balanceResp = await krakenApiWithNonceRetry(client, "Balance");
+
+    let tradeBalanceResp = null;
+    try {
+      tradeBalanceResp = await krakenApiWithNonceRetry(client, "TradeBalance", { asset: "ZUSD" });
+    } catch (err) {
+      const msg = String(err?.message || err || "");
+      console.warn("TradeBalance failed", msg);
+      tradeBalanceResp = null;
+    }
+
+    const balance = balanceResp?.result || {};
+    const tradeBalance = tradeBalanceResp?.result || null;
+
+    const availableZusd =
+      numOrNull(tradeBalance?.mf) ??
+      numOrNull(tradeBalance?.tb) ??
+      numOrNull(tradeBalance?.eb) ??
+      numOrNull(tradeBalance?.e) ??
+      numOrNull(balance?.ZUSD) ?? 0;
+
+    res.json({ status: "Connected", balance, tradeBalance, availableZusd });
   } catch (err) {
     res.status(500).json({ error: "Failed to connect to Kraken", details: err.message });
   }
@@ -605,8 +661,17 @@ app.get("/trades", authRequired, async (req, res) => {
 app.get("/api/alerts/safest", authRequired, async (req, res) => {
   const uid = String(req.user.uid);
   const rec = latestSafeTradesByUser.get(uid);
-  const safeTrades = Array.isArray(rec?.safeTrades) ? rec.safeTrades : [];
-  res.json({ ok: true, safeTrades, ts: rec?.ts || 0 });
+  let safeTrades = Array.isArray(rec?.safeTrades) ? rec.safeTrades : [];
+  let ts = rec?.ts || 0;
+
+  if (!safeTrades.length) {
+    const fallback = readSafeTradesFile();
+    safeTrades = fallback.safeTrades;
+    ts = ts || fallback.ts || 0;
+    if (safeTrades.length) latestSafeTradesByUser.set(uid, { ts: ts || Date.now(), safeTrades });
+  }
+
+  res.json({ ok: true, safeTrades, ts });
 });
 
 /* Alerts endpoint called by strategy page to push safeTrades and trigger telegram */
@@ -617,6 +682,7 @@ app.post("/api/alerts/safest", authRequired, async (req, res) => {
 
     /* NEW: always store latest for dashboard display */
     latestSafeTradesByUser.set(uid, { ts: Date.now(), safeTrades });
+    writeSafeTradesFile(safeTrades);
 
     if (!safeTrades.length) {
       lastSafeAlertByUser.set(uid, { sig: "", ts: 0 });
