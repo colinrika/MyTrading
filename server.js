@@ -88,6 +88,15 @@ async function initDb() {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
   `);
+
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS kraken_nonces (
+      user_id INTEGER PRIMARY KEY,
+      last_nonce INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+  `);
 }
 
 await initDb();
@@ -173,15 +182,33 @@ function trimNumberString(s) {
   return str.replace(/\.?0+$/, "");
 }
 
-async function krakenApiWithNonceRetry(client, method, params) {
-  const finalParams = { ...(params || {}), nonce: nextNonce() };
+async function nextNonce(uid) {
+  const now = Date.now() * 1000;
+  try {
+    const row = await dbGet(`SELECT last_nonce FROM kraken_nonces WHERE user_id = ?`, [uid]);
+    const last = Number(row?.last_nonce || 0);
+    const nonce = Math.max(last + 1, now);
+    await dbRun(
+      `INSERT INTO kraken_nonces (user_id, last_nonce, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET last_nonce = excluded.last_nonce, updated_at = excluded.updated_at`,
+      [uid, nonce, nowMs()]
+    );
+    return nonce;
+  } catch (err) {
+    console.warn("nextNonce fallback", err?.message || err);
+    return now;
+  }
+}
+
+async function krakenApiWithNonceRetry(client, uid, method, params) {
+  const finalParams = { ...(params || {}), nonce: await nextNonce(uid) };
   try {
     return await client.api(method, finalParams);
   } catch (err) {
     const msg = String(err?.message || err || "").toLowerCase();
     if (msg.includes("invalid nonce")) {
       await new Promise(r => setTimeout(r, 300));
-      finalParams.nonce = nextNonce();
+      finalParams.nonce = await nextNonce(uid);
       return await client.api(method, finalParams);
     }
     throw err;
@@ -297,8 +324,8 @@ function validateMinimums(meta, price, volumeStr) {
   return { ok: true };
 }
 
-async function queryOrder(krakenClient, txid) {
-  const resp = await krakenClient.api("QueryOrders", { txid });
+async function queryOrder(krakenClient, uid, txid) {
+  const resp = await krakenApiWithNonceRetry(krakenClient, uid, "QueryOrders", { txid });
   const result = resp?.result || {};
   const order = result[txid];
   return order || null;
@@ -570,7 +597,7 @@ app.get("/api/kraken/test", authRequired, async (req, res) => {
     const client = await getUserKrakenClient(req.user.uid);
     if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
 
-    const balance = await client.api("Balance");
+    const balance = await krakenApiWithNonceRetry(client, req.user.uid, "Balance");
     res.json({ ok: true, status: "Connected", balance: balance.result });
   } catch (err) {
     res.status(500).json({ error: "Connection failed", details: err.message });
@@ -618,11 +645,11 @@ app.get("/balance", authRequired, async (req, res) => {
     const client = await getUserKrakenClient(req.user.uid);
     if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
 
-    const balanceResp = await krakenApiWithNonceRetry(client, "Balance");
+    const balanceResp = await krakenApiWithNonceRetry(client, req.user.uid, "Balance");
 
     let tradeBalanceResp = null;
     try {
-      tradeBalanceResp = await krakenApiWithNonceRetry(client, "TradeBalance", { asset: "ZUSD" });
+      tradeBalanceResp = await krakenApiWithNonceRetry(client, req.user.uid, "TradeBalance", { asset: "ZUSD" });
     } catch (err) {
       const msg = String(err?.message || err || "");
       console.warn("TradeBalance failed", msg);
@@ -858,12 +885,12 @@ app.post("/trade", authRequired, async (req, res) => {
       });
     }
 
-    const mainOrder = await client.api("AddOrder", entryParams);
+    const mainOrder = await krakenApiWithNonceRetry(client, req.user.uid, "AddOrder", entryParams);
     const txid = Array.isArray(mainOrder?.result?.txid) ? mainOrder.result.txid[0] : "";
 
     let entryStatus = null;
     if (txid) {
-      try { entryStatus = await queryOrder(client, txid); } catch { entryStatus = null; }
+      try { entryStatus = await queryOrder(client, req.user.uid, txid); } catch { entryStatus = null; }
     }
 
     const isFilledNow =
