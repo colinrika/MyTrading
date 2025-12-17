@@ -742,21 +742,27 @@
         const tp = Number(document.getElementById("tpInput").value);
         const sl = Number(document.getElementById("slInput").value);
 
-        let isLogged = await ensureLoggedInSoft();
-        if (!isLogged) document.getElementById("usdQuick").textContent = "";
-
         let est = { available: 0, totalZusd: 0, invest: 0, qty: 0, estProfit: 0, estLoss: 0 };
-        if (isLogged) {
-          try {
-            const calc = await computeEstimates(entryPrice, tp, sl);
-            if (calc && calc.__unauth) {
-              isLogged = false;
-            } else if (calc) {
-              est = calc;
-            }
-          } catch (e) {
-            console.error("Estimate refresh failed", e);
+        let isLogged = false;
+
+        try {
+          const calc = await computeEstimates(entryPrice, tp, sl);
+          if (calc && calc.__unauth) {
+            isLogged = false;
+            document.getElementById("authBadge").textContent = "Not logged in";
+          } else if (calc) {
+            est = calc;
+            isLogged = true;
+            document.getElementById("authBadge").textContent = "Logged in";
+            document.getElementById("usdQuick").textContent = "ZUSD " + est.available.toFixed(4) + " / " + est.totalZusd.toFixed(4);
           }
+        } catch (e) {
+          console.error("Estimate refresh failed", e);
+          estimateBox.innerHTML = "<div class='bad' style='font-weight:bold;'>Funds unavailable. " + String(e?.message || e) + "</div>";
+          orderPreviewBox.innerHTML = "<div class='bad' style='font-weight:bold;'>Cannot fetch balance right now.</div>";
+          approveBtn.disabled = true;
+          approveBtn.textContent = "✅ Approve Strategy";
+          return;
         }
 
         const amt = Number(document.getElementById("tradeAmount").value || 0);

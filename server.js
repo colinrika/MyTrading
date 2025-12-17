@@ -173,6 +173,19 @@ function trimNumberString(s) {
   return str.replace(/\.?0+$/, "");
 }
 
+async function krakenApiWithNonceRetry(client, method, params) {
+  try {
+    return await client.api(method, params);
+  } catch (err) {
+    const msg = String(err?.message || err || "").toLowerCase();
+    if (msg.includes("invalid nonce")) {
+      await new Promise(r => setTimeout(r, 300));
+      return await client.api(method, params);
+    }
+    throw err;
+  }
+}
+
 function readSafeTradesFile() {
   try {
     const raw = fs.readFileSync(SAFE_TRADES_FILE, "utf8");
@@ -596,10 +609,16 @@ app.get("/balance", authRequired, async (req, res) => {
     const client = await getUserKrakenClient(req.user.uid);
     if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
 
-    const [balanceResp, tradeBalanceResp] = await Promise.all([
-      client.api("Balance"),
-      client.api("TradeBalance", { asset: "ZUSD" }).catch(() => null)
-    ]);
+    const balanceResp = await krakenApiWithNonceRetry(client, "Balance");
+
+    let tradeBalanceResp = null;
+    try {
+      tradeBalanceResp = await krakenApiWithNonceRetry(client, "TradeBalance", { asset: "ZUSD" });
+    } catch (err) {
+      const msg = String(err?.message || err || "");
+      console.warn("TradeBalance failed", msg);
+      tradeBalanceResp = null;
+    }
 
     const balance = balanceResp?.result || {};
     const tradeBalance = tradeBalanceResp?.result || null;
