@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
+import fs from "fs";
 import sqlite3 from "sqlite3";
 import bcrypt from "bcrypt";
 import cookieParser from "cookie-parser";
@@ -41,6 +42,8 @@ if (!ENC_KEY || ENC_KEY.length !== 32) {
 
 const DB_PATH = process.env.DB_PATH || "./app.db";
 const db = new sqlite3.Database(DB_PATH);
+
+const SAFE_TRADES_FILE = process.env.SAFE_TRADES_FILE || "./latest_safe_trades.json";
 
 function dbRun(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -81,6 +84,15 @@ async function initDb() {
       api_key TEXT NOT NULL,
       api_secret_enc TEXT NOT NULL,
       created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+  `);
+
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS kraken_nonces (
+      user_id INTEGER PRIMARY KEY,
+      last_nonce INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
@@ -170,6 +182,59 @@ function trimNumberString(s) {
   return str.replace(/\.?0+$/, "");
 }
 
+async function nextNonce(uid) {
+  const now = Date.now() * 1000;
+  try {
+    const row = await dbGet(`SELECT last_nonce FROM kraken_nonces WHERE user_id = ?`, [uid]);
+    const last = Number(row?.last_nonce || 0);
+    const nonce = Math.max(last + 1, now);
+    await dbRun(
+      `INSERT INTO kraken_nonces (user_id, last_nonce, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET last_nonce = excluded.last_nonce, updated_at = excluded.updated_at`,
+      [uid, nonce, nowMs()]
+    );
+    return nonce;
+  } catch (err) {
+    console.warn("nextNonce fallback", err?.message || err);
+    return now;
+  }
+}
+
+async function krakenApiWithNonceRetry(client, uid, method, params) {
+  const finalParams = { ...(params || {}), nonce: await nextNonce(uid) };
+  try {
+    return await client.api(method, finalParams);
+  } catch (err) {
+    const msg = String(err?.message || err || "").toLowerCase();
+    if (msg.includes("invalid nonce")) {
+      await new Promise(r => setTimeout(r, 300));
+      finalParams.nonce = await nextNonce(uid);
+      return await client.api(method, finalParams);
+    }
+    throw err;
+  }
+}
+
+function readSafeTradesFile() {
+  try {
+    const raw = fs.readFileSync(SAFE_TRADES_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed?.safeTrades)) return { ts: 0, safeTrades: [] };
+    const ts = numOrNull(parsed.ts) ?? 0;
+    return { ts, safeTrades: parsed.safeTrades };
+  } catch {
+    return { ts: 0, safeTrades: [] };
+  }
+}
+
+function writeSafeTradesFile(safeTrades) {
+  try {
+    const payload = { ts: Date.now(), safeTrades: Array.isArray(safeTrades) ? safeTrades : [] };
+    fs.writeFileSync(SAFE_TRADES_FILE, JSON.stringify(payload, null, 2), "utf8");
+  } catch {
+  }
+}
+
 const pairMetaCache = new Map();
 let lastPairMetaRefreshMs = 0;
 const PAIR_META_TTL_MS = 10 * 60 * 1000;
@@ -252,8 +317,8 @@ function validateMinimums(meta, price, volumeStr) {
   return { ok: true };
 }
 
-async function queryOrder(krakenClient, txid) {
-  const resp = await krakenClient.api("QueryOrders", { txid });
+async function queryOrder(krakenClient, uid, txid) {
+  const resp = await krakenApiWithNonceRetry(krakenClient, uid, "QueryOrders", { txid });
   const result = resp?.result || {};
   const order = result[txid];
   return order || null;
@@ -525,7 +590,7 @@ app.get("/api/kraken/test", authRequired, async (req, res) => {
     const client = await getUserKrakenClient(req.user.uid);
     if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
 
-    const balance = await client.api("Balance");
+    const balance = await krakenApiWithNonceRetry(client, req.user.uid, "Balance");
     res.json({ ok: true, status: "Connected", balance: balance.result });
   } catch (err) {
     res.status(500).json({ error: "Connection failed", details: err.message });
@@ -573,8 +638,28 @@ app.get("/balance", authRequired, async (req, res) => {
     const client = await getUserKrakenClient(req.user.uid);
     if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
 
-    const balance = await client.api("Balance");
-    res.json({ status: "Connected", balance: balance.result });
+    const balanceResp = await krakenApiWithNonceRetry(client, req.user.uid, "Balance");
+
+    let tradeBalanceResp = null;
+    try {
+      tradeBalanceResp = await krakenApiWithNonceRetry(client, req.user.uid, "TradeBalance", { asset: "ZUSD" });
+    } catch (err) {
+      const msg = String(err?.message || err || "");
+      console.warn("TradeBalance failed", msg);
+      tradeBalanceResp = null;
+    }
+
+    const balance = balanceResp?.result || {};
+    const tradeBalance = tradeBalanceResp?.result || null;
+
+    const availableZusd =
+      numOrNull(tradeBalance?.mf) ??
+      numOrNull(tradeBalance?.tb) ??
+      numOrNull(tradeBalance?.eb) ??
+      numOrNull(tradeBalance?.e) ??
+      numOrNull(balance?.ZUSD) ?? 0;
+
+    res.json({ status: "Connected", balance, tradeBalance, availableZusd });
   } catch (err) {
     res.status(500).json({ error: "Failed to connect to Kraken", details: err.message });
   }
@@ -605,8 +690,17 @@ app.get("/trades", authRequired, async (req, res) => {
 app.get("/api/alerts/safest", authRequired, async (req, res) => {
   const uid = String(req.user.uid);
   const rec = latestSafeTradesByUser.get(uid);
-  const safeTrades = Array.isArray(rec?.safeTrades) ? rec.safeTrades : [];
-  res.json({ ok: true, safeTrades, ts: rec?.ts || 0 });
+  let safeTrades = Array.isArray(rec?.safeTrades) ? rec.safeTrades : [];
+  let ts = rec?.ts || 0;
+
+  if (!safeTrades.length) {
+    const fallback = readSafeTradesFile();
+    safeTrades = fallback.safeTrades;
+    ts = ts || fallback.ts || 0;
+    if (safeTrades.length) latestSafeTradesByUser.set(uid, { ts: ts || Date.now(), safeTrades });
+  }
+
+  res.json({ ok: true, safeTrades, ts });
 });
 
 /* Alerts endpoint called by strategy page to push safeTrades and trigger telegram */
@@ -617,6 +711,7 @@ app.post("/api/alerts/safest", authRequired, async (req, res) => {
 
     /* NEW: always store latest for dashboard display */
     latestSafeTradesByUser.set(uid, { ts: Date.now(), safeTrades });
+    writeSafeTradesFile(safeTrades);
 
     if (!safeTrades.length) {
       lastSafeAlertByUser.set(uid, { sig: "", ts: 0 });
@@ -783,12 +878,12 @@ app.post("/trade", authRequired, async (req, res) => {
       });
     }
 
-    const mainOrder = await client.api("AddOrder", entryParams);
+    const mainOrder = await krakenApiWithNonceRetry(client, req.user.uid, "AddOrder", entryParams);
     const txid = Array.isArray(mainOrder?.result?.txid) ? mainOrder.result.txid[0] : "";
 
     let entryStatus = null;
     if (txid) {
-      try { entryStatus = await queryOrder(client, txid); } catch { entryStatus = null; }
+      try { entryStatus = await queryOrder(client, req.user.uid, txid); } catch { entryStatus = null; }
     }
 
     const isFilledNow =
