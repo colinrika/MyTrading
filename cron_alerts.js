@@ -15,6 +15,7 @@ const TOP_TO_SEND = Number(process.env.ALERT_TOP_TO_SEND || 3);
 
 const ALERT_SIG_FILE = String(process.env.ALERT_SIG_FILE || "./last_alert_sig.txt");
 const ALERT_COOLDOWN_MS = Number(process.env.ALERT_COOLDOWN_MS || (10 * 60 * 1000));
+const SAFE_TRADES_FILE = String(process.env.SAFE_TRADES_FILE || "./latest_safe_trades.json");
 
 function telegramConfigured() {
   return TELEGRAM_ENABLED && !!TELEGRAM_BOT_TOKEN && !!TELEGRAM_CHAT_ID;
@@ -321,6 +322,14 @@ function writePrevAlertState(sig) {
   }
 }
 
+function writeSafeTrades(trades) {
+  try {
+    const payload = { ts: Date.now(), safeTrades: Array.isArray(trades) ? trades : [] };
+    fs.writeFileSync(SAFE_TRADES_FILE, JSON.stringify(payload, null, 2), "utf8");
+  } catch {
+  }
+}
+
 async function runOnce() {
   if (!telegramConfigured()) throw new Error("Missing TELEGRAM env values");
 
@@ -353,6 +362,7 @@ async function runOnce() {
 
   if (!toSend.length) {
     console.log("No actionable safe trades right now");
+    writeSafeTrades([]);
     return;
   }
 
@@ -363,6 +373,7 @@ async function runOnce() {
   const inCooldown = (Date.now() - prev.ts) < ALERT_COOLDOWN_MS;
 
   if (same || inCooldown) {
+    writeSafeTrades(toSend);
     console.log("Skipping Telegram alert", same ? "same_signature" : "cooldown");
     return;
   }
@@ -370,6 +381,7 @@ async function runOnce() {
   const msg = buildTelegramMessage(toSend);
   await sendTelegram(msg);
   writePrevAlertState(sig);
+  writeSafeTrades(toSend);
 
   console.log("Sent Telegram alert for", toSend.map(x => x.pair).join(", "));
 }
