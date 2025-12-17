@@ -19,6 +19,7 @@
   },
   "homepage": "https://github.com/colinrika/MyTrading#readme",
   "dependencies": {
+    "@supabase/supabase-js": "^2.88.0",
     "bcrypt": "^6.0.0",
     "body-parser": "^1.20.2",
     "cookie-parser": "^1.4.7",
@@ -27,6 +28,7 @@
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
     "kraken-api": "^1.0.2",
+    "pg": "^8.16.3",
     "sqlite3": "^5.1.7"
   }
 }

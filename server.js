@@ -6,10 +6,12 @@ import path from "path";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
 import fs from "fs";
-import sqlite3 from "sqlite3";
 import bcrypt from "bcrypt";
 import cookieParser from "cookie-parser";
 import jwt from "jsonwebtoken";
+import pkg from "pg";
+
+const { Pool } = pkg;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,12 +29,12 @@ function nowIso() { return new Date().toISOString(); }
 
 const SIMULATOR_MODE = String(process.env.SIMULATOR_MODE || "false").toLowerCase() === "true";
 
-const APP_SECRET = process.env.APP_SECRET || "";
+const JWT_SECRET = process.env.JWT_SECRET || process.env.APP_SECRET || "";
 const ENC_KEY_B64 = process.env.ENC_KEY_BASE64 || "";
 const ENC_KEY = ENC_KEY_B64 ? Buffer.from(ENC_KEY_B64, "base64") : null;
 
-if (!APP_SECRET) {
-  console.error("Missing APP_SECRET in env");
+if (!JWT_SECRET) {
+  console.error("Missing JWT_SECRET (or APP_SECRET) in env");
   process.exit(1);
 }
 if (!ENC_KEY || ENC_KEY.length !== 32) {
@@ -40,61 +42,100 @@ if (!ENC_KEY || ENC_KEY.length !== 32) {
   process.exit(1);
 }
 
-const DB_PATH = process.env.DB_PATH || "./app.db";
-const db = new sqlite3.Database(DB_PATH);
-
-const SAFE_TRADES_FILE = process.env.SAFE_TRADES_FILE || "./latest_safe_trades.json";
-
-function dbRun(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function (err) {
-      if (err) reject(err);
-      else resolve(this);
-    });
-  });
+const DATABASE_URL = process.env.DATABASE_URL || "";
+if (!DATABASE_URL) {
+  console.error("Missing DATABASE_URL in env");
+  process.exit(1);
 }
 
-function dbGet(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) reject(err);
-      else resolve(row || null);
-    });
-  });
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
+
+async function dbQuery(text, params = []) {
+  const res = await pool.query(text, params);
+  return res.rows;
+}
+
+async function dbOne(text, params = []) {
+  const rows = await dbQuery(text, params);
+  return rows[0] || null;
+}
+
+async function dbExec(text, params = []) {
+  await pool.query(text, params);
 }
 
 async function initDb() {
-  await dbRun(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL UNIQUE,
-      phone TEXT NOT NULL,
-      pass_hash TEXT NOT NULL,
-      is_verified INTEGER NOT NULL DEFAULT 0,
-      verify_code TEXT,
-      verify_expires INTEGER,
-      created_at INTEGER NOT NULL
+  await dbExec(`
+    create table if not exists users (
+      id bigserial primary key,
+      name text not null,
+      email text not null unique,
+      phone text not null,
+      pass_hash text not null,
+      is_verified boolean not null default false,
+      verify_code text,
+      verify_expires bigint,
+      created_at bigint not null
     );
   `);
 
-  await dbRun(`
-    CREATE TABLE IF NOT EXISTS kraken_keys (
-      user_id INTEGER PRIMARY KEY,
-      api_key TEXT NOT NULL,
-      api_secret_enc TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  await dbExec(`
+    create table if not exists kraken_keys (
+      user_id bigint primary key references users(id) on delete cascade,
+      api_key text not null,
+      api_secret_enc text not null,
+      created_at bigint not null,
+      updated_at bigint not null
     );
   `);
 
-  await dbRun(`
-    CREATE TABLE IF NOT EXISTS kraken_nonces (
-      user_id INTEGER PRIMARY KEY,
-      last_nonce INTEGER NOT NULL DEFAULT 0,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  await dbExec(`
+    create table if not exists kraken_nonces (
+      user_id bigint primary key references users(id) on delete cascade,
+      last_nonce bigint not null default 0,
+      updated_at bigint not null
+    );
+  `);
+
+  await dbExec(`
+    create table if not exists safe_trades_latest (
+      user_id bigint primary key references users(id) on delete cascade,
+      ts bigint not null,
+      safe_trades jsonb not null default '[]'::jsonb
+    );
+  `);
+
+  await dbExec(`
+    create table if not exists safe_alert_state (
+      user_id bigint primary key references users(id) on delete cascade,
+      last_sig text not null default '',
+      last_sent_ts bigint not null default 0
+    );
+  `);
+
+  await dbExec(`
+    create table if not exists trades (
+      id bigserial primary key,
+      user_id bigint not null references users(id) on delete cascade,
+      ts bigint not null,
+      time_iso text not null,
+      pair text not null default '',
+      side text not null default '',
+      order_type text not null default '',
+      invest_usd numeric,
+      volume text not null default '',
+      entry_price numeric,
+      take_profit numeric,
+      stop_loss numeric,
+      est_profit_usd numeric,
+      est_loss_usd numeric,
+      status text not null default '',
+      message text not null default '',
+      txid text not null default '',
+      is_auto boolean not null default false
     );
   `);
 }
@@ -125,14 +166,14 @@ function decryptText(b64) {
 }
 
 function signToken(user) {
-  return jwt.sign({ uid: user.id, email: user.email }, APP_SECRET, { expiresIn: "7d" });
+  return jwt.sign({ uid: user.id, email: user.email }, JWT_SECRET, { expiresIn: "7d" });
 }
 
 function authRequired(req, res, next) {
   try {
     const token = req.cookies?.session || "";
     if (!token) return res.status(401).json({ error: "Not logged in" });
-    const payload = jwt.verify(token, APP_SECRET);
+    const payload = jwt.verify(token, JWT_SECRET);
     req.user = payload;
     next();
   } catch {
@@ -147,7 +188,7 @@ function pageAuthRequired(req, res, next) {
       const nextUrl = encodeURIComponent(req.originalUrl || "/dashboard.html");
       return res.redirect("/login.html?next=" + nextUrl);
     }
-    const payload = jwt.verify(token, APP_SECRET);
+    const payload = jwt.verify(token, JWT_SECRET);
     req.user = payload;
     next();
   } catch {
@@ -157,7 +198,10 @@ function pageAuthRequired(req, res, next) {
 }
 
 async function getUserKrakenClient(uid) {
-  const row = await dbGet(`SELECT api_key, api_secret_enc FROM kraken_keys WHERE user_id = ?`, [uid]);
+  const row = await dbOne(
+    `select api_key, api_secret_enc from kraken_keys where user_id = $1`,
+    [uid]
+  );
   if (!row) return null;
   const secret = decryptText(row.api_secret_enc);
   return new KrakenClient(row.api_key, secret);
@@ -184,20 +228,24 @@ function trimNumberString(s) {
 
 async function nextNonce(uid) {
   const now = Date.now() * 1000;
-  try {
-    const row = await dbGet(`SELECT last_nonce FROM kraken_nonces WHERE user_id = ?`, [uid]);
-    const last = Number(row?.last_nonce || 0);
-    const nonce = Math.max(last + 1, now);
-    await dbRun(
-      `INSERT INTO kraken_nonces (user_id, last_nonce, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT(user_id) DO UPDATE SET last_nonce = excluded.last_nonce, updated_at = excluded.updated_at`,
-      [uid, nonce, nowMs()]
-    );
-    return nonce;
-  } catch (err) {
-    console.warn("nextNonce fallback", err?.message || err);
-    return now;
-  }
+  const row = await dbOne(
+    `select last_nonce from kraken_nonces where user_id = $1`,
+    [uid]
+  );
+  const last = Number(row?.last_nonce || 0);
+  const nonce = Math.max(last + 1, now);
+
+  await dbExec(
+    `
+    insert into kraken_nonces (user_id, last_nonce, updated_at)
+    values ($1, $2, $3)
+    on conflict (user_id)
+    do update set last_nonce = excluded.last_nonce, updated_at = excluded.updated_at
+    `,
+    [uid, nonce, nowMs()]
+  );
+
+  return nonce;
 }
 
 async function krakenApiWithNonceRetry(client, uid, method, params) {
@@ -207,7 +255,7 @@ async function krakenApiWithNonceRetry(client, uid, method, params) {
   } catch (err) {
     const msg = String(err?.message || err || "").toLowerCase();
     if (msg.includes("invalid nonce")) {
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise(r => setTimeout(r, 350));
       finalParams.nonce = await nextNonce(uid);
       return await client.api(method, finalParams);
     }
@@ -215,35 +263,15 @@ async function krakenApiWithNonceRetry(client, uid, method, params) {
   }
 }
 
-function readSafeTradesFile() {
-  try {
-    const raw = fs.readFileSync(SAFE_TRADES_FILE, "utf8");
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed?.safeTrades)) return { ts: 0, safeTrades: [] };
-    const ts = numOrNull(parsed.ts) ?? 0;
-    return { ts, safeTrades: parsed.safeTrades };
-  } catch {
-    return { ts: 0, safeTrades: [] };
-  }
-}
-
-function writeSafeTradesFile(safeTrades) {
-  try {
-    const payload = { ts: Date.now(), safeTrades: Array.isArray(safeTrades) ? safeTrades : [] };
-    fs.writeFileSync(SAFE_TRADES_FILE, JSON.stringify(payload, null, 2), "utf8");
-  } catch {
-  }
-}
-
 const pairMetaCache = new Map();
 let lastPairMetaRefreshMs = 0;
 const PAIR_META_TTL_MS = 10 * 60 * 1000;
 
-async function ensurePairMetaLoaded(krakenClient, uid) {
+async function ensurePairMetaLoaded(krakenClient) {
   const now = Date.now();
   if (pairMetaCache.size && (now - lastPairMetaRefreshMs) < PAIR_META_TTL_MS) return;
 
-  const resp = await krakenApiWithNonceRetry(krakenClient, uid, "AssetPairs");
+  const resp = await krakenClient.api("AssetPairs");
   const result = resp?.result || {};
 
   pairMetaCache.clear();
@@ -251,8 +279,6 @@ async function ensurePairMetaLoaded(krakenClient, uid) {
     const info = result[key] || {};
     pairMetaCache.set(key, {
       wsname: info.wsname || "",
-      base: info.base || "",
-      quote: info.quote || "",
       pair_decimals: numOrNull(info.pair_decimals) ?? 5,
       lot_decimals: numOrNull(info.lot_decimals) ?? 8,
       ordermin: numOrNull(info.ordermin),
@@ -263,8 +289,8 @@ async function ensurePairMetaLoaded(krakenClient, uid) {
   lastPairMetaRefreshMs = now;
 }
 
-async function getPairMeta(krakenClient, uid, pair) {
-  await ensurePairMetaLoaded(krakenClient, uid);
+async function getPairMeta(krakenClient, pair) {
+  await ensurePairMetaLoaded(krakenClient);
 
   if (pairMetaCache.has(pair)) return pairMetaCache.get(pair);
 
@@ -273,7 +299,7 @@ async function getPairMeta(krakenClient, uid, pair) {
     if (v.wsname && v.wsname === pair) return v;
   }
 
-  return { wsname: "", base: "", quote: "", pair_decimals: 5, lot_decimals: 8, ordermin: null, costmin: null };
+  return { wsname: "", pair_decimals: 5, lot_decimals: 8, ordermin: null, costmin: null };
 }
 
 function formatOrderNumbers(meta, payload) {
@@ -326,55 +352,45 @@ async function queryOrder(krakenClient, uid, txid) {
   return order || null;
 }
 
-async function getBalanceMap(client, uid) {
-  const balanceResp = await krakenApiWithNonceRetry(client, uid, "Balance");
-  const b = balanceResp?.result || {};
-  const out = {};
-  for (const k of Object.keys(b)) out[k] = Number(b[k]) || 0;
-  return out;
-}
-
-/* Trades log in memory */
-const tradeLog = [];
-let tradeIdSeq = 1;
-
 function safeStr(v) {
   if (v === null || v === undefined) return "";
   return String(v);
 }
 
-function logTrade(entry) {
-  const item = {
-    id: tradeIdSeq++,
-    time: nowIso(),
-    pair: safeStr(entry.pair),
-    side: safeStr(entry.side),
-    orderType: safeStr(entry.orderType),
-    investUsd: entry.investUsd ?? null,
-    volume: safeStr(entry.volume),
-    entryPrice: entry.entryPrice ?? null,
-    takeProfit: entry.takeProfit ?? null,
-    stopLoss: entry.stopLoss ?? null,
-    estProfitUsd: entry.estProfitUsd ?? null,
-    estLossUsd: entry.estLossUsd ?? null,
-    status: safeStr(entry.status),
-    message: safeStr(entry.message),
-    txid: safeStr(entry.txid || ""),
-    isAuto: entry.isAuto === true,
-    userId: entry.userId ?? null
-  };
+async function logTradeDb(uid, entry) {
+  const ts = nowMs();
+  const timeIso = nowIso();
 
-  tradeLog.unshift(item);
-  if (tradeLog.length > 2000) tradeLog.length = 2000;
-  return item;
+  await dbExec(
+    `
+    insert into trades
+    (user_id, ts, time_iso, pair, side, order_type, invest_usd, volume, entry_price, take_profit, stop_loss, est_profit_usd, est_loss_usd, status, message, txid, is_auto)
+    values
+    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+    `,
+    [
+      uid,
+      ts,
+      timeIso,
+      safeStr(entry.pair),
+      safeStr(entry.side),
+      safeStr(entry.orderType),
+      entry.investUsd ?? null,
+      safeStr(entry.volume),
+      entry.entryPrice ?? null,
+      entry.takeProfit ?? null,
+      entry.stopLoss ?? null,
+      entry.estProfitUsd ?? null,
+      entry.estLossUsd ?? null,
+      safeStr(entry.status),
+      safeStr(entry.message),
+      safeStr(entry.txid || ""),
+      entry.isAuto === true
+    ]
+  );
 }
 
-/* Telegram alerts */
 const ALERT_COOLDOWN_MS = 10 * 60 * 1000;
-const lastSafeAlertByUser = new Map();
-
-/* Store latest safe trades per user for dashboard display */
-const latestSafeTradesByUser = new Map();
 
 function telegramConfigured() {
   const enabled = String(process.env.TELEGRAM_ENABLED || "").toLowerCase() === "true";
@@ -462,10 +478,6 @@ app.get("/login.html", (req, res) => res.sendFile(path.join(__dirname, "login.ht
 app.get("/register.html", (req, res) => res.sendFile(path.join(__dirname, "register.html")));
 app.get("/verify.html", (req, res) => res.sendFile(path.join(__dirname, "verify.html")));
 
-app.get("/dashboard", pageAuthRequired, (req, res) => res.sendFile(path.join(__dirname, "dashboard.html")));
-app.get("/account", pageAuthRequired, (req, res) => res.sendFile(path.join(__dirname, "account.html")));
-app.get("/connect", pageAuthRequired, (req, res) => res.sendFile(path.join(__dirname, "connect-kraken.html")));
-
 /* Static assets after protected routes */
 app.use(express.static(__dirname));
 
@@ -491,20 +503,22 @@ app.post("/api/register", async (req, res) => {
     const code = makeVerifyCode();
     const expires = nowMs() + 10 * 60 * 1000;
 
-    await dbRun(
-      `INSERT INTO users (name, email, phone, pass_hash, is_verified, verify_code, verify_expires, created_at)
-       VALUES (?, ?, ?, ?, 0, ?, ?, ?)`,
+    await dbExec(
+      `
+      insert into users (name, email, phone, pass_hash, is_verified, verify_code, verify_expires, created_at)
+      values ($1, $2, $3, $4, false, $5, $6, $7)
+      `,
       [name, email, phone, pass_hash, code, expires, nowMs()]
     );
 
     console.log("Verification code for", email, "is", code);
-
     return res.json({ ok: true });
   } catch (err) {
-    if (String(err.message || "").includes("UNIQUE")) {
+    const msg = String(err?.message || "");
+    if (msg.toLowerCase().includes("duplicate") || msg.toLowerCase().includes("unique")) {
       return res.status(400).json({ error: "Email already registered" });
     }
-    return res.status(500).json({ error: "Register failed", details: err.message });
+    return res.status(500).json({ error: "Register failed", details: msg });
   }
 });
 
@@ -513,18 +527,22 @@ app.post("/api/verify", async (req, res) => {
     const email = String(req.body?.email || "").trim().toLowerCase();
     const code = String(req.body?.code || "").trim();
 
-    const user = await dbGet(`SELECT * FROM users WHERE email = ?`, [email]);
+    const user = await dbOne(`select * from users where email = $1`, [email]);
     if (!user) return res.status(400).json({ error: "Invalid email" });
-    if (Number(user.is_verified) === 1) return res.json({ ok: true });
+    if (user.is_verified === true) return res.json({ ok: true });
 
     const exp = Number(user.verify_expires || 0);
     if (!user.verify_code || nowMs() > exp) return res.status(400).json({ error: "Code expired" });
     if (String(user.verify_code) !== code) return res.status(400).json({ error: "Invalid code" });
 
-    await dbRun(`UPDATE users SET is_verified = 1, verify_code = NULL, verify_expires = NULL WHERE id = ?`, [user.id]);
+    await dbExec(
+      `update users set is_verified = true, verify_code = null, verify_expires = null where id = $1`,
+      [user.id]
+    );
+
     return res.json({ ok: true });
   } catch (err) {
-    return res.status(500).json({ error: "Verify failed", details: err.message });
+    return res.status(500).json({ error: "Verify failed", details: String(err?.message || err) });
   }
 });
 
@@ -533,9 +551,9 @@ app.post("/api/login", async (req, res) => {
     const email = String(req.body?.email || "").trim().toLowerCase();
     const password = String(req.body?.password || "");
 
-    const user = await dbGet(`SELECT * FROM users WHERE email = ?`, [email]);
+    const user = await dbOne(`select * from users where email = $1`, [email]);
     if (!user) return res.status(400).json({ error: "Invalid login" });
-    if (Number(user.is_verified) !== 1) return res.status(403).json({ error: "Account not verified" });
+    if (user.is_verified !== true) return res.status(403).json({ error: "Account not verified" });
 
     const ok = await bcrypt.compare(password, user.pass_hash);
     if (!ok) return res.status(400).json({ error: "Invalid login" });
@@ -547,10 +565,10 @@ app.post("/api/login", async (req, res) => {
       secure: String(process.env.NODE_ENV || "").toLowerCase() === "production"
     });
 
-    const keys = await dbGet(`SELECT user_id FROM kraken_keys WHERE user_id = ?`, [user.id]);
+    const keys = await dbOne(`select user_id from kraken_keys where user_id = $1`, [user.id]);
     return res.json({ ok: true, hasKraken: !!keys });
   } catch (err) {
-    return res.status(500).json({ error: "Login failed", details: err.message });
+    return res.status(500).json({ error: "Login failed", details: String(err?.message || err) });
   }
 });
 
@@ -568,22 +586,19 @@ app.post("/api/kraken/save", authRequired, async (req, res) => {
 
     const encSecret = encryptText(apiSecret);
 
-    const existing = await dbGet(`SELECT user_id FROM kraken_keys WHERE user_id = ?`, [req.user.uid]);
-    if (existing) {
-      await dbRun(
-        `UPDATE kraken_keys SET api_key = ?, api_secret_enc = ?, updated_at = ? WHERE user_id = ?`,
-        [apiKey, encSecret, nowMs(), req.user.uid]
-      );
-    } else {
-      await dbRun(
-        `INSERT INTO kraken_keys (user_id, api_key, api_secret_enc, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-        [req.user.uid, apiKey, encSecret, nowMs(), nowMs()]
-      );
-    }
+    await dbExec(
+      `
+      insert into kraken_keys (user_id, api_key, api_secret_enc, created_at, updated_at)
+      values ($1, $2, $3, $4, $5)
+      on conflict (user_id)
+      do update set api_key = excluded.api_key, api_secret_enc = excluded.api_secret_enc, updated_at = excluded.updated_at
+      `,
+      [req.user.uid, apiKey, encSecret, nowMs(), nowMs()]
+    );
 
     res.json({ ok: true });
   } catch (err) {
-    res.status(500).json({ error: "Save failed", details: err.message });
+    res.status(500).json({ error: "Save failed", details: String(err?.message || err) });
   }
 });
 
@@ -595,21 +610,21 @@ app.get("/api/kraken/test", authRequired, async (req, res) => {
     const balance = await krakenApiWithNonceRetry(client, req.user.uid, "Balance");
     res.json({ ok: true, status: "Connected", balance: balance.result });
   } catch (err) {
-    res.status(500).json({ error: "Connection failed", details: err.message });
+    res.status(500).json({ error: "Connection failed", details: String(err?.message || err) });
   }
 });
 
 app.get("/api/account/status", authRequired, async (req, res) => {
   try {
-    const keys = await dbGet(`SELECT user_id FROM kraken_keys WHERE user_id = ?`, [req.user.uid]);
-    const user = await dbGet(`SELECT is_verified FROM users WHERE id = ?`, [req.user.uid]);
+    const keys = await dbOne(`select user_id from kraken_keys where user_id = $1`, [req.user.uid]);
+    const user = await dbOne(`select is_verified from users where id = $1`, [req.user.uid]);
 
     res.json({
       krakenConnected: !!keys,
-      emailVerified: Number(user?.is_verified || 0) === 1
+      emailVerified: user?.is_verified === true
     });
   } catch (e) {
-    res.status(500).json({ error: "Status failed", details: String(e.message || e) });
+    res.status(500).json({ error: "Status failed", details: String(e?.message || e) });
   }
 });
 
@@ -621,19 +636,17 @@ app.get("/pair-info", authRequired, async (req, res) => {
     const client = await getUserKrakenClient(req.user.uid);
     if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
 
-    const meta = await getPairMeta(client, req.user.uid, pair);
+    const meta = await getPairMeta(client, pair);
     res.json({
       pair,
       wsname: meta.wsname,
-      base: meta.base,
-      quote: meta.quote,
       pair_decimals: meta.pair_decimals,
       lot_decimals: meta.lot_decimals,
       ordermin: meta.ordermin,
       costmin: meta.costmin
     });
   } catch (err) {
-    res.status(500).json({ error: "Failed to load pair info", details: err.message });
+    res.status(500).json({ error: "Failed to load pair info", details: String(err?.message || err) });
   }
 });
 
@@ -648,8 +661,7 @@ app.get("/balance", authRequired, async (req, res) => {
     try {
       tradeBalanceResp = await krakenApiWithNonceRetry(client, req.user.uid, "TradeBalance", { asset: "ZUSD" });
     } catch (err) {
-      const msg = String(err?.message || err || "");
-      console.warn("TradeBalance failed", msg);
+      console.warn("TradeBalance failed", String(err?.message || err));
       tradeBalanceResp = null;
     }
 
@@ -665,7 +677,7 @@ app.get("/balance", authRequired, async (req, res) => {
 
     res.json({ status: "Connected", balance, tradeBalance, availableZusd });
   } catch (err) {
-    res.status(500).json({ error: "Failed to connect to Kraken", details: err.message });
+    res.status(500).json({ error: "Failed to connect to Kraken", details: String(err?.message || err) });
   }
 });
 
@@ -675,49 +687,91 @@ app.get("/trades", authRequired, async (req, res) => {
   const limit = Math.max(1, Math.min(100, Number(req.query.limit || req.query.pageSize || 10)));
   const q = String(req.query.q || "").trim().toLowerCase();
 
-  let filtered = tradeLog.filter(t => String(t.userId) === String(req.user.uid));
+  const offset = (page - 1) * limit;
+
   if (q) {
-    filtered = filtered.filter(t => {
-      const hay = (t.pair + " " + t.side + " " + t.orderType + " " + t.status + " " + t.message).toLowerCase();
-      return hay.includes(q);
-    });
+    const items = await dbQuery(
+      `
+      select * from trades
+      where user_id = $1
+        and (lower(pair) like $2 or lower(side) like $2 or lower(order_type) like $2 or lower(status) like $2 or lower(message) like $2)
+      order by id desc
+      limit $3 offset $4
+      `,
+      [req.user.uid, "%" + q + "%", limit, offset]
+    );
+
+    const totalRow = await dbOne(
+      `
+      select count(*)::bigint as c from trades
+      where user_id = $1
+        and (lower(pair) like $2 or lower(side) like $2 or lower(order_type) like $2 or lower(status) like $2 or lower(message) like $2)
+      `,
+      [req.user.uid, "%" + q + "%"]
+    );
+
+    return res.json({ page, limit, total: Number(totalRow?.c || 0), items });
   }
 
-  const total = filtered.length;
-  const start = (page - 1) * limit;
-  const items = filtered.slice(start, start + limit);
+  const items = await dbQuery(
+    `
+    select * from trades
+    where user_id = $1
+    order by id desc
+    limit $2 offset $3
+    `,
+    [req.user.uid, limit, offset]
+  );
 
-  res.json({ page, limit, total, items });
+  const totalRow = await dbOne(
+    `select count(*)::bigint as c from trades where user_id = $1`,
+    [req.user.uid]
+  );
+
+  res.json({ page, limit, total: Number(totalRow?.c || 0), items });
 });
 
-/* Dashboard safe trades */
+/* Dashboard safe trades now come from Postgres, not memory */
 app.get("/api/alerts/safest", authRequired, async (req, res) => {
-  const uid = String(req.user.uid);
-  const rec = latestSafeTradesByUser.get(uid);
-  let safeTrades = Array.isArray(rec?.safeTrades) ? rec.safeTrades : [];
-  let ts = rec?.ts || 0;
+  const uid = Number(req.user.uid);
 
-  if (!safeTrades.length) {
-    const fallback = readSafeTradesFile();
-    safeTrades = fallback.safeTrades;
-    ts = ts || fallback.ts || 0;
-    if (safeTrades.length) latestSafeTradesByUser.set(uid, { ts: ts || Date.now(), safeTrades });
-  }
+  const row = await dbOne(
+    `select ts, safe_trades from safe_trades_latest where user_id = $1`,
+    [uid]
+  );
 
-  res.json({ ok: true, safeTrades, ts });
+  const ts = Number(row?.ts || 0);
+  const safeTrades = Array.isArray(row?.safe_trades) ? row.safe_trades : (row?.safe_trades || []);
+
+  res.json({ ok: true, safeTrades: Array.isArray(safeTrades) ? safeTrades : [], ts });
 });
 
-/* Alerts */
+/* Alerts store to Postgres then optionally send Telegram */
 app.post("/api/alerts/safest", authRequired, async (req, res) => {
   try {
+    const uid = Number(req.user.uid);
     const safeTrades = Array.isArray(req.body?.safeTrades) ? req.body.safeTrades : [];
-    const uid = String(req.user.uid);
 
-    latestSafeTradesByUser.set(uid, { ts: Date.now(), safeTrades });
-    writeSafeTradesFile(safeTrades);
+    await dbExec(
+      `
+      insert into safe_trades_latest (user_id, ts, safe_trades)
+      values ($1, $2, $3::jsonb)
+      on conflict (user_id)
+      do update set ts = excluded.ts, safe_trades = excluded.safe_trades
+      `,
+      [uid, nowMs(), JSON.stringify(safeTrades)]
+    );
 
     if (!safeTrades.length) {
-      lastSafeAlertByUser.set(uid, { sig: "", ts: 0 });
+      await dbExec(
+        `
+        insert into safe_alert_state (user_id, last_sig, last_sent_ts)
+        values ($1, '', 0)
+        on conflict (user_id)
+        do update set last_sig = excluded.last_sig, last_sent_ts = excluded.last_sent_ts
+        `,
+        [uid]
+      );
       return res.json({ ok: true, sent: false, reason: "empty" });
     }
 
@@ -726,34 +780,47 @@ app.post("/api/alerts/safest", authRequired, async (req, res) => {
     }
 
     const sig = safeTradesSignature(safeTrades);
-    const prev = lastSafeAlertByUser.get(uid) || { sig: "", ts: 0 };
-    const now = Date.now();
+    const prev = await dbOne(
+      `select last_sig, last_sent_ts from safe_alert_state where user_id = $1`,
+      [uid]
+    );
 
-    const same = prev.sig === sig;
-    const inCooldown = (now - prev.ts) < ALERT_COOLDOWN_MS;
+    const prevSig = String(prev?.last_sig || "");
+    const prevTs = Number(prev?.last_sent_ts || 0);
+    const now = nowMs();
+
+    const same = prevSig === sig;
+    const inCooldown = (now - prevTs) < ALERT_COOLDOWN_MS;
 
     if (same || inCooldown) {
       return res.json({ ok: true, sent: false, reason: same ? "already_sent_for_this_set" : "cooldown" });
     }
 
-    lastSafeAlertByUser.set(uid, { sig, ts: now });
+    await dbExec(
+      `
+      insert into safe_alert_state (user_id, last_sig, last_sent_ts)
+      values ($1, $2, $3)
+      on conflict (user_id)
+      do update set last_sig = excluded.last_sig, last_sent_ts = excluded.last_sent_ts
+      `,
+      [uid, sig, now]
+    );
 
     const msg = buildTelegramMessage(safeTrades);
     const tg = await sendTelegram(msg);
 
     return res.json({ ok: true, sent: true, telegram: tg });
   } catch (e) {
-    return res.status(500).json({ ok: false, error: String(e.message || e) });
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
-/* Telegram test */
 app.get("/api/telegram/test", authRequired, async (req, res) => {
   try {
     const r = await sendTelegram("Test ping from server " + new Date().toISOString());
     res.json({ ok: true, telegram: r });
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e.message || e) });
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
@@ -761,7 +828,7 @@ app.get("/api/telegram/test", authRequired, async (req, res) => {
 app.post("/trade", authRequired, async (req, res) => {
   const raw = req.body || {};
   const pair = raw.pair;
-  const side = String(raw.side || "").toLowerCase();
+  const side = raw.side;
   const orderType = raw.orderType || "limit";
   const investUsd = numOrNull(raw.investUsd);
 
@@ -770,20 +837,15 @@ app.post("/trade", authRequired, async (req, res) => {
     if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
 
     if (!pair || !side) {
-      logTrade({ pair, side, orderType, investUsd, volume: "", status: "error", message: "Missing pair or side", userId: req.user.uid });
+      await logTradeDb(req.user.uid, { pair, side, orderType, investUsd, volume: "", status: "error", message: "Missing pair or side" });
       return res.status(400).json({ error: "Missing required trade parameters" });
     }
 
-    if (side !== "buy" && side !== "sell") {
-      logTrade({ pair, side, orderType, investUsd, volume: "", status: "error", message: "Invalid side", userId: req.user.uid });
-      return res.status(400).json({ error: "Invalid side" });
-    }
-
-    const meta = await getPairMeta(client, req.user.uid, pair);
+    const meta = await getPairMeta(client, pair);
     const nums = formatOrderNumbers(meta, raw);
 
     if (!nums.price) {
-      logTrade({ pair, side, orderType, investUsd, volume: "", status: "error", message: "Invalid price", userId: req.user.uid });
+      await logTradeDb(req.user.uid, { pair, side, orderType, investUsd, volume: "", status: "error", message: "Invalid price" });
       return res.status(400).json({ error: "Invalid price" });
     }
 
@@ -799,7 +861,7 @@ app.post("/trade", authRequired, async (req, res) => {
     }
 
     if (!volumeStr || Number(volumeStr) <= 0) {
-      logTrade({ pair, side, orderType, investUsd, volume: "", status: "error", message: "Invalid volume", userId: req.user.uid });
+      await logTradeDb(req.user.uid, { pair, side, orderType, investUsd, volume: "", status: "error", message: "Invalid volume" });
       return res.status(400).json({ error: "Invalid volume" });
     }
 
@@ -814,14 +876,13 @@ app.post("/trade", authRequired, async (req, res) => {
           ? meta.costmin
           : (meta.ordermin !== null ? meta.ordermin * nums.price : null);
 
-      logTrade({
+      await logTradeDb(req.user.uid, {
         pair, side, orderType, investUsd, volume: volumeStr,
         entryPrice: nums.price,
         takeProfit: nums.takeProfit ?? clampPrice(meta, nums.price * 1.05),
         stopLoss: nums.stopLoss ?? clampPrice(meta, nums.price * 0.93),
         status: "rejected",
-        message: "Minimum not met. " + hint,
-        userId: req.user.uid
+        message: "Minimum not met. " + hint
       });
 
       return res.status(400).json({
@@ -843,52 +904,6 @@ app.post("/trade", authRequired, async (req, res) => {
     const estProfitUsd = (takeProfit !== null) ? (takeProfit - entryPrice) * volNum : null;
     const estLossUsd = (stopLoss !== null) ? (entryPrice - stopLoss) * volNum : null;
 
-    /* Funds guard */
-    const balances = await getBalanceMap(client, req.user.uid);
-
-    const quote = meta.quote || "ZUSD";
-    const base = meta.base || "";
-
-    const feeBufferRate = Math.max(0, Number(process.env.FEE_BUFFER_RATE || 0.012));
-    const requiredQuote = volNum * entryPrice * (1 + feeBufferRate);
-
-    if (side === "buy") {
-      const quoteAvail = Number(balances[quote] || balances.ZUSD || 0);
-      if (requiredQuote > quoteAvail) {
-        const hint = "Not enough " + quote + ". Required about " + requiredQuote.toFixed(2) + " including buffer. Available " + quoteAvail.toFixed(2);
-        logTrade({
-          pair, side, orderType, investUsd, volume: volumeStr,
-          entryPrice, takeProfit, stopLoss,
-          estProfitUsd, estLossUsd,
-          status: "rejected",
-          message: hint,
-          userId: req.user.uid
-        });
-        return res.status(400).json({ error: "Insufficient funds", hint, required: requiredQuote, available: quoteAvail, asset: quote });
-      }
-    }
-
-    if (side === "sell") {
-      if (!base) {
-        const hint = "Cannot determine base asset for this pair. Sell blocked.";
-        logTrade({ pair, side, orderType, investUsd, volume: volumeStr, entryPrice, status: "rejected", message: hint, userId: req.user.uid });
-        return res.status(400).json({ error: "Sell blocked", hint });
-      }
-      const baseAvail = Number(balances[base] || 0);
-      if (volNum > baseAvail) {
-        const hint = "Not enough " + base + " to sell. Trying to sell " + volNum + " but you have " + baseAvail;
-        logTrade({
-          pair, side, orderType, investUsd, volume: volumeStr,
-          entryPrice, takeProfit, stopLoss,
-          estProfitUsd, estLossUsd,
-          status: "rejected",
-          message: hint,
-          userId: req.user.uid
-        });
-        return res.status(400).json({ error: "Insufficient funds", hint, required: volNum, available: baseAvail, asset: base });
-      }
-    }
-
     const entryParams = {
       pair,
       type: side,
@@ -909,7 +924,7 @@ app.post("/trade", authRequired, async (req, res) => {
       const fakeTxid = "SIM_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
       const msgTxt = "Simulator mode. No Kraken order was placed.";
 
-      logTrade({
+      await logTradeDb(req.user.uid, {
         pair, side, orderType, investUsd,
         volume: volumeStr,
         entryPrice,
@@ -920,8 +935,7 @@ app.post("/trade", authRequired, async (req, res) => {
         status: "simulated",
         message: msgTxt,
         txid: fakeTxid,
-        isAuto: raw.isAuto === true,
-        userId: req.user.uid
+        isAuto: raw.isAuto === true
       });
 
       return res.json({
@@ -949,7 +963,7 @@ app.post("/trade", authRequired, async (req, res) => {
       ? "Entry placed and filled. Exits can be handled after fill."
       : "Entry placed. Exits will be handled after fill.";
 
-    logTrade({
+    await logTradeDb(req.user.uid, {
       pair, side, orderType, investUsd,
       volume: volumeStr,
       entryPrice,
@@ -960,8 +974,7 @@ app.post("/trade", authRequired, async (req, res) => {
       status: isFilledNow ? "filled" : "submitted",
       message: msgTxt,
       txid,
-      isAuto: raw.isAuto === true,
-      userId: req.user.uid
+      isAuto: raw.isAuto === true
     });
 
     res.json({
@@ -973,9 +986,9 @@ app.post("/trade", authRequired, async (req, res) => {
     });
 
   } catch (err) {
-    const details = err.response?.error || err.message || "Trade execution failed";
+    const details = err?.response?.error || err?.message || "Trade execution failed";
 
-    logTrade({
+    await logTradeDb(req.user.uid, {
       pair, side, orderType, investUsd,
       volume: safeStr(raw.volume),
       entryPrice: numOrNull(raw.price),
@@ -983,11 +996,10 @@ app.post("/trade", authRequired, async (req, res) => {
       stopLoss: numOrNull(raw.stopLoss),
       status: "error",
       message: safeStr(details),
-      isAuto: raw.isAuto === true,
-      userId: req.user.uid
+      isAuto: raw.isAuto === true
     });
 
-    res.status(500).json({ error: "Trade execution failed", details });
+    res.status(500).json({ error: "Trade execution failed", details: safeStr(details) });
   }
 });
 
