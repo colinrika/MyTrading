@@ -463,7 +463,7 @@ app.get("/verify.html", (req, res) => res.sendFile(path.join(__dirname, "verify.
 
 app.get("/dashboard", pageAuthRequired, (req, res) => res.redirect("/dashboard.html"));
 app.get("/account", pageAuthRequired, (req, res) => res.redirect("/account.html"));
-app.get("/connect-kraken", pageAuthRequired, (req, res) => res.redirect("/connect-kraken.html"));
+app.get("/connect", pageAuthRequired, (req, res) => res.redirect("/connect.html"));
 app.get("/strategy", pageAuthRequired, (req, res) => res.redirect("/strategy.html"));
 
 
