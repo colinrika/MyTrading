@@ -298,6 +298,9 @@ function logTrade(entry) {
 const ALERT_COOLDOWN_MS = 10 * 60 * 1000;
 const lastSafeAlertByUser = new Map();
 
+/* NEW: store latest safe trades per user for dashboard display */
+const latestSafeTradesByUser = new Map(); // uid -> { ts, safeTrades }
+
 function telegramConfigured() {
   const enabled = String(process.env.TELEGRAM_ENABLED || "").toLowerCase() === "true";
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -598,11 +601,22 @@ app.get("/trades", authRequired, async (req, res) => {
   res.json({ page, limit, total, items });
 });
 
-/* Alerts endpoint called by dashboard */
+/* NEW: dashboard uses GET to fetch safeTrades to display */
+app.get("/api/alerts/safest", authRequired, async (req, res) => {
+  const uid = String(req.user.uid);
+  const rec = latestSafeTradesByUser.get(uid);
+  const safeTrades = Array.isArray(rec?.safeTrades) ? rec.safeTrades : [];
+  res.json({ ok: true, safeTrades, ts: rec?.ts || 0 });
+});
+
+/* Alerts endpoint called by strategy page to push safeTrades and trigger telegram */
 app.post("/api/alerts/safest", authRequired, async (req, res) => {
   try {
     const safeTrades = Array.isArray(req.body?.safeTrades) ? req.body.safeTrades : [];
     const uid = String(req.user.uid);
+
+    /* NEW: always store latest for dashboard display */
+    latestSafeTradesByUser.set(uid, { ts: Date.now(), safeTrades });
 
     if (!safeTrades.length) {
       lastSafeAlertByUser.set(uid, { sig: "", ts: 0 });

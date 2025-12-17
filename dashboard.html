@@ -165,8 +165,13 @@
     }
 
     @keyframes pulse {
-      from { box-shadow: 0 0 6px rgba(0, 255, 0, 0.1); }
-      to { box-shadow: 0 0 14px rgba(0, 255, 0, 0.5); }
+      from {
+        box-shadow: 0 0 6px rgba(0, 255, 0, 0.1);
+      }
+
+      to {
+        box-shadow: 0 0 14px rgba(0, 255, 0, 0.5);
+      }
     }
 
     footer {
@@ -613,7 +618,7 @@
 
         row.innerHTML =
           "<td>" +
-            "<a class='coinLink' href='" + href + "' target='_blank' rel='noopener noreferrer'>" + pairText + "</a>" +
+          "<a class='coinLink' href='" + href + "' target='_blank' rel='noopener noreferrer'>" + pairText + "</a>" +
           "</td>" +
           "<td>" + r.last.toFixed(6) + "</td>" +
           "<td style='color:" + (r.predChange > 0 ? "lightgreen" : "red") + ";'>" + r.predChange.toFixed(2) + "%</td>" +
@@ -637,6 +642,14 @@
         if (Array.isArray(arr)) safeTrades = arr;
       } catch {
       }
+
+      // after safeTrades is built and before/after you render it
+      try {
+        await postJson(apiUrl("/api/alerts/safest"), { safeTrades });
+      } catch (e) {
+        console.log("Safest trade POST failed", e?.message || e);
+      }
+
 
       safeListEl.innerHTML = "";
 

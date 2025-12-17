@@ -1,4 +1,5 @@
 import dotenv from "dotenv";
+import fs from "fs";
 
 dotenv.config();
 
@@ -12,12 +13,11 @@ const MAX_SCAN_PAIRS = Number(process.env.ALERT_MAX_SCAN_PAIRS || 30);
 const QUALITY_MIN = Number(process.env.ALERT_QUALITY_MIN || 80);
 const TOP_TO_SEND = Number(process.env.ALERT_TOP_TO_SEND || 3);
 
+const ALERT_SIG_FILE = String(process.env.ALERT_SIG_FILE || "./last_alert_sig.txt");
+const ALERT_COOLDOWN_MS = Number(process.env.ALERT_COOLDOWN_MS || (10 * 60 * 1000));
+
 function telegramConfigured() {
   return TELEGRAM_ENABLED && !!TELEGRAM_BOT_TOKEN && !!TELEGRAM_CHAT_ID;
-}
-
-function requireAppBaseUrl() {
-  if (!APP_BASE_URL) throw new Error("Missing APP_BASE_URL env value");
 }
 
 async function sendTelegram(text) {
@@ -42,11 +42,6 @@ async function sendTelegram(text) {
   }
 
   return data;
-}
-
-function num(v) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
 }
 
 function ema(values, period) {
@@ -263,6 +258,7 @@ async function fetchOHLC(pair, intervalMin, candles) {
 }
 
 function buildTradeLink(pair) {
+  if (!APP_BASE_URL) return "";
   const p = encodeURIComponent(String(pair || ""));
   return `${APP_BASE_URL}/strategy.html?pair=${p}`;
 }
@@ -279,11 +275,11 @@ function buildTelegramMessage(trades) {
     msg += `${prettyPair(t.pair)}\n`;
     msg += `Signal ${side}  Quality ${Number(rec.quality || 0)}\n`;
     msg += `Entry ${round6(rec.price ?? t.last ?? 0)}\n`;
-    msg += `TP ${round6(rec.takeProfit ?? 0)}\n`;
-    msg += `SL ${round6(rec.stopLoss ?? 0)}\n`;
+    if (rec.takeProfit != null) msg += `TP ${round6(rec.takeProfit)}\n`;
+    if (rec.stopLoss != null) msg += `SL ${round6(rec.stopLoss)}\n`;
     if (rec.actionTitle) msg += `${rec.actionTitle}\n`;
     if (rec.tag) msg += `Tag ${rec.tag}\n`;
-    msg += `Open strategy ${link}\n`;
+    if (link) msg += `Open strategy ${link}\n`;
     msg += `\n`;
   }
 
@@ -291,9 +287,42 @@ function buildTelegramMessage(trades) {
   return msg;
 }
 
+function makeAlertSignature(trades) {
+  return trades.map(t => {
+    const r = t.recommended || {};
+    return [
+      String(t.pair || ""),
+      String(r.side || ""),
+      String(r.tag || ""),
+      round6(r.price ?? t.last ?? 0),
+      r.takeProfit == null ? "" : round6(r.takeProfit),
+      r.stopLoss == null ? "" : round6(r.stopLoss),
+      String(r.quality || 0)
+    ].join("|");
+  }).join(";");
+}
+
+function readPrevAlertState() {
+  try {
+    const raw = fs.readFileSync(ALERT_SIG_FILE, "utf8");
+    const parts = raw.split("\n");
+    const ts = Number(parts[0] || 0);
+    const sig = String(parts.slice(1).join("\n") || "").trim();
+    return { ts: Number.isFinite(ts) ? ts : 0, sig };
+  } catch {
+    return { ts: 0, sig: "" };
+  }
+}
+
+function writePrevAlertState(sig) {
+  try {
+    fs.writeFileSync(ALERT_SIG_FILE, String(Date.now()) + "\n" + String(sig || ""), "utf8");
+  } catch {
+  }
+}
+
 async function runOnce() {
   if (!telegramConfigured()) throw new Error("Missing TELEGRAM env values");
-  requireAppBaseUrl();
 
   const allPairs = await getAllUsdPairs();
   const topPairs = await getTopPairsByVolumeUsd(allPairs, MAX_SCAN_PAIRS);
@@ -316,7 +345,6 @@ async function runOnce() {
         results.push(rowObj);
       }
     } catch {
-      // ignore noisy pairs
     }
   }
 
@@ -328,8 +356,21 @@ async function runOnce() {
     return;
   }
 
+  const sig = makeAlertSignature(toSend);
+  const prev = readPrevAlertState();
+
+  const same = prev.sig === sig;
+  const inCooldown = (Date.now() - prev.ts) < ALERT_COOLDOWN_MS;
+
+  if (same || inCooldown) {
+    console.log("Skipping Telegram alert", same ? "same_signature" : "cooldown");
+    return;
+  }
+
   const msg = buildTelegramMessage(toSend);
   await sendTelegram(msg);
+  writePrevAlertState(sig);
+
   console.log("Sent Telegram alert for", toSend.map(x => x.pair).join(", "));
 }
 
