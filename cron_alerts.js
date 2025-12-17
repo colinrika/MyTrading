@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 import fs from "fs";
+import path from "path";
 
 dotenv.config();
 
@@ -13,9 +14,19 @@ const MAX_SCAN_PAIRS = Number(process.env.ALERT_MAX_SCAN_PAIRS || 30);
 const QUALITY_MIN = Number(process.env.ALERT_QUALITY_MIN || 80);
 const TOP_TO_SEND = Number(process.env.ALERT_TOP_TO_SEND || 3);
 
-const ALERT_SIG_FILE = String(process.env.ALERT_SIG_FILE || "./last_alert_sig.txt");
+const ALERT_SIG_FILE_RAW = String(process.env.ALERT_SIG_FILE || "./last_alert_sig.txt");
 const ALERT_COOLDOWN_MS = Number(process.env.ALERT_COOLDOWN_MS || (10 * 60 * 1000));
-const SAFE_TRADES_FILE = String(process.env.SAFE_TRADES_FILE || "./latest_safe_trades.json");
+
+const SAFE_TRADES_FILE_RAW = String(process.env.SAFE_TRADES_FILE || "./latest_safe_trades.json");
+const SAFE_TRADES_KEEP_LAST_MS = Number(process.env.SAFE_TRADES_KEEP_LAST_MS || (20 * 60 * 1000));
+
+function toAbs(p) {
+  const s = String(p || "");
+  return path.isAbsolute(s) ? s : path.resolve(process.cwd(), s);
+}
+
+const ALERT_SIG_FILE = toAbs(ALERT_SIG_FILE_RAW);
+const SAFE_TRADES_FILE = toAbs(SAFE_TRADES_FILE_RAW);
 
 function telegramConfigured() {
   return TELEGRAM_ENABLED && !!TELEGRAM_BOT_TOKEN && !!TELEGRAM_CHAT_ID;
@@ -322,6 +333,17 @@ function writePrevAlertState(sig) {
   }
 }
 
+function readSafeTradesFile() {
+  try {
+    const raw = fs.readFileSync(SAFE_TRADES_FILE, "utf8");
+    const j = JSON.parse(raw);
+    if (!j || typeof j !== "object") return null;
+    return j;
+  } catch {
+    return null;
+  }
+}
+
 function writeSafeTrades(trades) {
   try {
     const payload = { ts: Date.now(), safeTrades: Array.isArray(trades) ? trades : [] };
@@ -332,6 +354,9 @@ function writeSafeTrades(trades) {
 
 async function runOnce() {
   if (!telegramConfigured()) throw new Error("Missing TELEGRAM env values");
+
+  console.log("SAFE_TRADES_FILE:", SAFE_TRADES_FILE);
+  console.log("ALERT_SIG_FILE:", ALERT_SIG_FILE);
 
   const allPairs = await getAllUsdPairs();
   const topPairs = await getTopPairsByVolumeUsd(allPairs, MAX_SCAN_PAIRS);
@@ -362,15 +387,26 @@ async function runOnce() {
 
   if (!toSend.length) {
     console.log("No actionable safe trades right now");
-    writeSafeTrades([]);
+
+    const prev = readSafeTradesFile();
+    const prevTs = Number(prev?.ts || 0);
+    const ageMs = Date.now() - prevTs;
+
+    if (!prev || !prevTs || !Number.isFinite(ageMs) || ageMs > SAFE_TRADES_KEEP_LAST_MS) {
+      writeSafeTrades([]);
+      console.log("Wrote empty safe trades payload");
+    } else {
+      console.log("Keeping previous safe trades payload for dashboard, age_ms:", ageMs);
+    }
+
     return;
   }
 
   const sig = makeAlertSignature(toSend);
-  const prev = readPrevAlertState();
+  const prevAlert = readPrevAlertState();
 
-  const same = prev.sig === sig;
-  const inCooldown = (Date.now() - prev.ts) < ALERT_COOLDOWN_MS;
+  const same = prevAlert.sig === sig;
+  const inCooldown = (Date.now() - prevAlert.ts) < ALERT_COOLDOWN_MS;
 
   if (same || inCooldown) {
     writeSafeTrades(toSend);
