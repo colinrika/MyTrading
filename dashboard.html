@@ -265,6 +265,23 @@
     let redirecting = false;
 
     function apiUrl(p) { return window.location.origin + p; }
+    function parseTotalZusd(resp) {
+      const total = Number(resp?.balance?.ZUSD);
+      return Number.isFinite(total) ? total : 0;
+    }
+    function parseAvailableZusd(resp) {
+      const candidates = [
+        Number(resp?.availableZusd),
+        Number(resp?.tradeBalance?.mf),
+        Number(resp?.tradeBalance?.tb),
+        Number(resp?.tradeBalance?.eb),
+        Number(resp?.tradeBalance?.e)
+      ];
+      for (const v of candidates) {
+        if (Number.isFinite(v)) return v;
+      }
+      return parseTotalZusd(resp);
+    }
 
     function setAggressiveUi() {
       const cb = document.getElementById("aggressiveToggle");
@@ -419,8 +436,8 @@
       if (loggedOut) return;
       try {
         const d = await getJson(apiUrl("/balance"));
-        const totalZusd = Number(d.balance?.ZUSD || 0);
-        const avail = Number(d.tradeBalance?.available ?? totalZusd);
+        const totalZusd = parseTotalZusd(d);
+        const avail = parseAvailableZusd(d);
         const ts = new Date().toLocaleTimeString();
         document.getElementById("usdQuick").textContent =
           "ZUSD available " + avail.toFixed(4) + " total " + totalZusd.toFixed(4) + " updated " + ts;
