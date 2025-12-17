@@ -267,16 +267,6 @@
       return Number.isFinite(m) ? m : null;
     }
 
-    function approxPullbackSwingHigh(closes, lookbackBars) {
-      const n = Math.max(3, Number(lookbackBars || 10));
-      if (!Array.isArray(closes) || closes.length < n) return null;
-      let m = -Infinity;
-      for (let i = closes.length - n; i < closes.length; i++) {
-        m = Math.max(m, closes[i]);
-      }
-      return Number.isFinite(m) ? m : null;
-    }
-
     function calculateRSI_Wilder(closes, period) {
       if (!Array.isArray(closes) || closes.length < period + 1) return 50;
 
@@ -363,25 +353,11 @@
         return prevBelow && nowAbove;
       }
 
-      function isReclaimShortAt(i) {
-        const emaNow = m5Ema20Series[i];
-        const emaPrev = m5Ema20Series[i - 1];
-        if (!Number.isFinite(emaNow) || !Number.isFinite(emaPrev) || !Number.isFinite(m5Vwap)) return false;
-
-        const cNow = m5Closes[i];
-        const cPrev = m5Closes[i - 1];
-
-        const prevAbove = (cPrev >= emaPrev) || (cPrev >= m5Vwap);
-        const nowBelow = (cNow < emaNow) && (cNow < m5Vwap);
-        return prevAbove && nowBelow;
-      }
-
       let reclaimBarsAgo = null;
       const lastIdx = m5Closes.length - 1;
 
       for (let i = lastIdx; i >= Math.max(1, lastIdx - 2); i--) {
         if (upBias && isReclaimLongAt(i)) { reclaimBarsAgo = lastIdx - i; break; }
-        if (downBias && isReclaimShortAt(i)) { reclaimBarsAgo = lastIdx - i; break; }
       }
 
       const isFreshSetup = reclaimBarsAgo !== null && reclaimBarsAgo <= 2;
@@ -408,24 +384,16 @@
       }
 
       if (downBias) {
-        if (reclaimBarsAgo === null) {
-          return { tag: "Waiting for pullback reclaim", actionTitle: "No trade yet", details: "Trend is down but no reclaim yet. " + explainBase, side: null, orderType: null, price: null, quality: 0, next: "Wait for a reclaim candle below EMA 20 and VWAP." };
-        }
-        if (!isFreshSetup) {
-          return { tag: "Setup too old", actionTitle: "No trade right now", details: "Reclaim happened too long ago. " + explainBase, side: null, orderType: null, price: null, quality: 0, next: "Wait for a new reclaim." };
-        }
-
-        const entry = currentPrice;
-        const swingHigh = approxPullbackSwingHigh(m5Closes, 12);
-        const stop = swingHigh ? (swingHigh * 1.001) : (entry * 1.008);
-        const r = stop - entry;
-        const tp = entry - (r * (aggressive ? 1.5 : 2.0));
-
-        let q = aggressive ? 70 : 82;
-        if (reclaimBarsAgo === 1) q -= 8;
-        if (reclaimBarsAgo === 2) q -= 15;
-
-        return { tag: "Trend pullback reclaim", actionTitle: "Sell after pullback confirms", details: "Trend down and reclaim confirmed. " + explainBase, side: "sell", orderType: "limit", price: entry, quality: q, stopLoss: stop, takeProfit: tp, fresh: true, freshBarsAgo: reclaimBarsAgo, next: "Use stop beyond pullback swing high." };
+        return {
+          tag: "Downtrend",
+          actionTitle: "No buy right now",
+          details: "Trend is down. This bot does not short. " + explainBase,
+          side: null,
+          orderType: null,
+          price: null,
+          quality: 0,
+          next: "Wait for trend to flip back above EMA 200 or hold coins you already own to sell manually."
+        };
       }
 
       return { tag: "No setup", actionTitle: "No trade right now", details: "No clean setup.", side: null, orderType: null, price: null, quality: 0, next: "Wait." };
@@ -619,7 +587,6 @@
       const sl = Number(document.getElementById("slInput") ? document.getElementById("slInput").value : 0);
 
       const d = await getJson(apiUrl("/balance"));
-      const totalZusd = parseTotalZusd(d);
       const available = parseAvailableZusd(d);
 
       const amt = Number(document.getElementById("tradeAmount") ? document.getElementById("tradeAmount").value : 0);
@@ -757,7 +724,6 @@
             document.getElementById("usdQuick").textContent = "ZUSD " + est.available.toFixed(4) + " / " + est.totalZusd.toFixed(4);
           }
         } catch (e) {
-          console.error("Estimate refresh failed", e);
           estimateBox.innerHTML = "<div class='bad' style='font-weight:bold;'>Funds unavailable. " + String(e?.message || e) + "</div>";
           orderPreviewBox.innerHTML = "<div class='bad' style='font-weight:bold;'>Cannot fetch balance right now.</div>";
           approveBtn.disabled = true;
@@ -819,7 +785,6 @@
 
         try {
           const d = await getJson(apiUrl("/balance"));
-          const totalZusd = parseTotalZusd(d);
           const available = parseAvailableZusd(d);
 
           const amt = Number(document.getElementById("tradeAmount").value || 0);

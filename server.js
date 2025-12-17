@@ -238,19 +238,12 @@ function writeSafeTradesFile(safeTrades) {
 const pairMetaCache = new Map();
 let lastPairMetaRefreshMs = 0;
 const PAIR_META_TTL_MS = 10 * 60 * 1000;
-let lastNonce = 0;
-/**
-function nextNonce() {
-  const now = Date.now() * 1000;
-  lastNonce = Math.max(lastNonce + 1, now);
-  return lastNonce;
-}
- */
-async function ensurePairMetaLoaded(krakenClient) {
+
+async function ensurePairMetaLoaded(krakenClient, uid) {
   const now = Date.now();
   if (pairMetaCache.size && (now - lastPairMetaRefreshMs) < PAIR_META_TTL_MS) return;
 
-  const resp = await krakenClient.api("AssetPairs");
+  const resp = await krakenApiWithNonceRetry(krakenClient, uid, "AssetPairs");
   const result = resp?.result || {};
 
   pairMetaCache.clear();
@@ -258,6 +251,8 @@ async function ensurePairMetaLoaded(krakenClient) {
     const info = result[key] || {};
     pairMetaCache.set(key, {
       wsname: info.wsname || "",
+      base: info.base || "",
+      quote: info.quote || "",
       pair_decimals: numOrNull(info.pair_decimals) ?? 5,
       lot_decimals: numOrNull(info.lot_decimals) ?? 8,
       ordermin: numOrNull(info.ordermin),
@@ -268,8 +263,8 @@ async function ensurePairMetaLoaded(krakenClient) {
   lastPairMetaRefreshMs = now;
 }
 
-async function getPairMeta(krakenClient, pair) {
-  await ensurePairMetaLoaded(krakenClient);
+async function getPairMeta(krakenClient, uid, pair) {
+  await ensurePairMetaLoaded(krakenClient, uid);
 
   if (pairMetaCache.has(pair)) return pairMetaCache.get(pair);
 
@@ -278,7 +273,7 @@ async function getPairMeta(krakenClient, pair) {
     if (v.wsname && v.wsname === pair) return v;
   }
 
-  return { wsname: "", pair_decimals: 5, lot_decimals: 8, ordermin: null, costmin: null };
+  return { wsname: "", base: "", quote: "", pair_decimals: 5, lot_decimals: 8, ordermin: null, costmin: null };
 }
 
 function formatOrderNumbers(meta, payload) {
@@ -331,6 +326,14 @@ async function queryOrder(krakenClient, uid, txid) {
   return order || null;
 }
 
+async function getBalanceMap(client, uid) {
+  const balanceResp = await krakenApiWithNonceRetry(client, uid, "Balance");
+  const b = balanceResp?.result || {};
+  const out = {};
+  for (const k of Object.keys(b)) out[k] = Number(b[k]) || 0;
+  return out;
+}
+
 /* Trades log in memory */
 const tradeLog = [];
 let tradeIdSeq = 1;
@@ -370,8 +373,8 @@ function logTrade(entry) {
 const ALERT_COOLDOWN_MS = 10 * 60 * 1000;
 const lastSafeAlertByUser = new Map();
 
-/* NEW: store latest safe trades per user for dashboard display */
-const latestSafeTradesByUser = new Map(); // uid -> { ts, safeTrades }
+/* Store latest safe trades per user for dashboard display */
+const latestSafeTradesByUser = new Map();
 
 function telegramConfigured() {
   const enabled = String(process.env.TELEGRAM_ENABLED || "").toLowerCase() === "true";
@@ -459,17 +462,9 @@ app.get("/login.html", (req, res) => res.sendFile(path.join(__dirname, "login.ht
 app.get("/register.html", (req, res) => res.sendFile(path.join(__dirname, "register.html")));
 app.get("/verify.html", (req, res) => res.sendFile(path.join(__dirname, "verify.html")));
 
-app.get("/dashboard", pageAuthRequired, (req, res) => {
-  res.sendFile(path.join(__dirname, "dashboard.html"));
-});
-
-app.get("/account", pageAuthRequired, (req, res) => {
-  res.sendFile(path.join(__dirname, "account.html"));
-});
-
-app.get("/connect", pageAuthRequired, (req, res) => {
-  res.sendFile(path.join(__dirname, "connect-kraken.html"));
-});
+app.get("/dashboard", pageAuthRequired, (req, res) => res.sendFile(path.join(__dirname, "dashboard.html")));
+app.get("/account", pageAuthRequired, (req, res) => res.sendFile(path.join(__dirname, "account.html")));
+app.get("/connect", pageAuthRequired, (req, res) => res.sendFile(path.join(__dirname, "connect-kraken.html")));
 
 /* Static assets after protected routes */
 app.use(express.static(__dirname));
@@ -626,10 +621,12 @@ app.get("/pair-info", authRequired, async (req, res) => {
     const client = await getUserKrakenClient(req.user.uid);
     if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
 
-    const meta = await getPairMeta(client, pair);
+    const meta = await getPairMeta(client, req.user.uid, pair);
     res.json({
       pair,
       wsname: meta.wsname,
+      base: meta.base,
+      quote: meta.quote,
       pair_decimals: meta.pair_decimals,
       lot_decimals: meta.lot_decimals,
       ordermin: meta.ordermin,
@@ -693,7 +690,7 @@ app.get("/trades", authRequired, async (req, res) => {
   res.json({ page, limit, total, items });
 });
 
-/* NEW: dashboard uses GET to fetch safeTrades to display */
+/* Dashboard safe trades */
 app.get("/api/alerts/safest", authRequired, async (req, res) => {
   const uid = String(req.user.uid);
   const rec = latestSafeTradesByUser.get(uid);
@@ -710,13 +707,12 @@ app.get("/api/alerts/safest", authRequired, async (req, res) => {
   res.json({ ok: true, safeTrades, ts });
 });
 
-/* Alerts endpoint called by strategy page to push safeTrades and trigger telegram */
+/* Alerts */
 app.post("/api/alerts/safest", authRequired, async (req, res) => {
   try {
     const safeTrades = Array.isArray(req.body?.safeTrades) ? req.body.safeTrades : [];
     const uid = String(req.user.uid);
 
-    /* NEW: always store latest for dashboard display */
     latestSafeTradesByUser.set(uid, { ts: Date.now(), safeTrades });
     writeSafeTradesFile(safeTrades);
 
@@ -751,7 +747,7 @@ app.post("/api/alerts/safest", authRequired, async (req, res) => {
   }
 });
 
-/* Telegram test should be protected */
+/* Telegram test */
 app.get("/api/telegram/test", authRequired, async (req, res) => {
   try {
     const r = await sendTelegram("Test ping from server " + new Date().toISOString());
@@ -765,7 +761,7 @@ app.get("/api/telegram/test", authRequired, async (req, res) => {
 app.post("/trade", authRequired, async (req, res) => {
   const raw = req.body || {};
   const pair = raw.pair;
-  const side = raw.side;
+  const side = String(raw.side || "").toLowerCase();
   const orderType = raw.orderType || "limit";
   const investUsd = numOrNull(raw.investUsd);
 
@@ -778,7 +774,12 @@ app.post("/trade", authRequired, async (req, res) => {
       return res.status(400).json({ error: "Missing required trade parameters" });
     }
 
-    const meta = await getPairMeta(client, pair);
+    if (side !== "buy" && side !== "sell") {
+      logTrade({ pair, side, orderType, investUsd, volume: "", status: "error", message: "Invalid side", userId: req.user.uid });
+      return res.status(400).json({ error: "Invalid side" });
+    }
+
+    const meta = await getPairMeta(client, req.user.uid, pair);
     const nums = formatOrderNumbers(meta, raw);
 
     if (!nums.price) {
@@ -841,6 +842,52 @@ app.post("/trade", authRequired, async (req, res) => {
     const volNum = Number(volumeStr);
     const estProfitUsd = (takeProfit !== null) ? (takeProfit - entryPrice) * volNum : null;
     const estLossUsd = (stopLoss !== null) ? (entryPrice - stopLoss) * volNum : null;
+
+    /* Funds guard */
+    const balances = await getBalanceMap(client, req.user.uid);
+
+    const quote = meta.quote || "ZUSD";
+    const base = meta.base || "";
+
+    const feeBufferRate = Math.max(0, Number(process.env.FEE_BUFFER_RATE || 0.012));
+    const requiredQuote = volNum * entryPrice * (1 + feeBufferRate);
+
+    if (side === "buy") {
+      const quoteAvail = Number(balances[quote] || balances.ZUSD || 0);
+      if (requiredQuote > quoteAvail) {
+        const hint = "Not enough " + quote + ". Required about " + requiredQuote.toFixed(2) + " including buffer. Available " + quoteAvail.toFixed(2);
+        logTrade({
+          pair, side, orderType, investUsd, volume: volumeStr,
+          entryPrice, takeProfit, stopLoss,
+          estProfitUsd, estLossUsd,
+          status: "rejected",
+          message: hint,
+          userId: req.user.uid
+        });
+        return res.status(400).json({ error: "Insufficient funds", hint, required: requiredQuote, available: quoteAvail, asset: quote });
+      }
+    }
+
+    if (side === "sell") {
+      if (!base) {
+        const hint = "Cannot determine base asset for this pair. Sell blocked.";
+        logTrade({ pair, side, orderType, investUsd, volume: volumeStr, entryPrice, status: "rejected", message: hint, userId: req.user.uid });
+        return res.status(400).json({ error: "Sell blocked", hint });
+      }
+      const baseAvail = Number(balances[base] || 0);
+      if (volNum > baseAvail) {
+        const hint = "Not enough " + base + " to sell. Trying to sell " + volNum + " but you have " + baseAvail;
+        logTrade({
+          pair, side, orderType, investUsd, volume: volumeStr,
+          entryPrice, takeProfit, stopLoss,
+          estProfitUsd, estLossUsd,
+          status: "rejected",
+          message: hint,
+          userId: req.user.uid
+        });
+        return res.status(400).json({ error: "Insufficient funds", hint, required: volNum, available: baseAvail, asset: base });
+      }
+    }
 
     const entryParams = {
       pair,
