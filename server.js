@@ -174,13 +174,15 @@ function trimNumberString(s) {
 }
 
 async function krakenApiWithNonceRetry(client, method, params) {
+  const finalParams = { ...(params || {}), nonce: nextNonce() };
   try {
-    return await client.api(method, params);
+    return await client.api(method, finalParams);
   } catch (err) {
     const msg = String(err?.message || err || "").toLowerCase();
     if (msg.includes("invalid nonce")) {
       await new Promise(r => setTimeout(r, 300));
-      return await client.api(method, params);
+      finalParams.nonce = nextNonce();
+      return await client.api(method, finalParams);
     }
     throw err;
   }
@@ -209,6 +211,13 @@ function writeSafeTradesFile(safeTrades) {
 const pairMetaCache = new Map();
 let lastPairMetaRefreshMs = 0;
 const PAIR_META_TTL_MS = 10 * 60 * 1000;
+let lastNonce = 0;
+
+function nextNonce() {
+  const now = Date.now() * 1000;
+  lastNonce = Math.max(lastNonce + 1, now);
+  return lastNonce;
+}
 
 async function ensurePairMetaLoaded(krakenClient) {
   const now = Date.now();
