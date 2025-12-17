@@ -239,13 +239,13 @@ const pairMetaCache = new Map();
 let lastPairMetaRefreshMs = 0;
 const PAIR_META_TTL_MS = 10 * 60 * 1000;
 let lastNonce = 0;
-
+/**
 function nextNonce() {
   const now = Date.now() * 1000;
   lastNonce = Math.max(lastNonce + 1, now);
   return lastNonce;
 }
-
+ */
 async function ensurePairMetaLoaded(krakenClient) {
   const now = Date.now();
   if (pairMetaCache.size && (now - lastPairMetaRefreshMs) < PAIR_META_TTL_MS) return;
