@@ -2,166 +2,200 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>📈 Dashboard</title>
+  <title>Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     body { font-family: Arial, sans-serif; background-color: #0d1117; color: #e6edf3; margin: 0; padding: 20px; }
     h2 { color: #58a6ff; margin: 8px 0 12px 0; text-align: center; }
 
     .wrap { width: 92%; max-width: 1200px; margin: 0 auto; }
-    .topBar { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+    .topBar { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 
     a.linkBtn, button.linkBtn {
-      text-decoration:none; background:#58a6ff; color:#fff; font-weight:bold;
-      border-radius:10px; padding:10px 14px; display:inline-block; border:none; cursor:pointer;
+      text-decoration: none; background: #58a6ff; color: #fff; font-weight: bold;
+      border-radius: 10px; padding: 10px 14px; display: inline-block;
+      border: none; cursor: pointer;
     }
-    a.linkBtn:hover, button.linkBtn:hover { filter: brightness(1.05); }
-    button.grayBtn { background:#30363d; }
 
     .panel { background: #161b22; border: 2px solid #30363d; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
-    .panel h3 { margin: 0 0 10px 0; font-size: 16px; }
 
-    .kvRow { display:flex; justify-content:space-between; gap:10px; border-bottom:1px solid rgba(255,255,255,0.06); padding:6px 0; }
-    .kvRow:last-child { border-bottom:none; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; }
+    .row > div { flex: 1 1 360px; }
 
-    .muted { color:#8b949e; font-size:12px; }
-    .good { color: lightgreen; }
-    .bad { color:#ff5555; }
-    .warn { color:#ffcc00; }
-
-    .controls { display:flex; gap:10px; flex-wrap:wrap; align-items:end; }
-    .control { display:flex; flex-direction:column; gap:6px; }
     input, select {
-      border-radius:10px; border:1px solid #30363d; background:#0d1117; color:#e6edf3;
-      padding:10px 12px; width:220px; box-sizing:border-box;
+      border-radius: 8px; border: 1px solid #30363d; background: #0d1117;
+      color: #e6edf3; padding: 9px 10px; width: 100%; box-sizing: border-box;
     }
 
-    table { width:100%; border-collapse:collapse; margin-top:10px; }
-    th, td { padding:10px; border:1px solid #30363d; vertical-align:top; }
-    th { background:#0d1117; text-align:left; }
-    tr.clickable { cursor:pointer; }
-    tr.clickable:hover { background: rgba(88,166,255,0.08); }
+    .muted { color: #8b949e; font-size: 12px; }
+    .ok { color: lightgreen; font-weight: bold; }
+    .warn { color: #ffcc00; font-weight: bold; }
+    .bad { color: #ff5555; font-weight: bold; }
 
-    .pill { background:#0d1117; border:1px solid #30363d; border-radius:999px; padding:6px 10px; display:inline-block; }
-    .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
-    @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border-bottom: 1px solid #30363d; padding: 8px; text-align: left; font-size: 13px; vertical-align: top; }
+    th { color: #58a6ff; font-size: 13px; }
+    .smallBtn { padding: 8px 10px; border-radius: 8px; font-weight: bold; background: #58a6ff; color: #fff; border: none; cursor: pointer; }
+    .smallBtn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    canvas { width: 100%; height: 420px !important; }
+    .chartBox { margin-top: 10px; }
+    .splitCharts { display:flex; gap:12px; flex-wrap:wrap; }
+    .splitCharts > div { flex: 1 1 520px; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h2>📈 Dashboard</h2>
+    <h2>Dashboard</h2>
 
     <div class="topBar">
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
-        <a class="linkBtn" href="/account.html">📒 Account</a>
-        <a class="linkBtn" href="/connect-kraken.html">🔑 Kraken</a>
-        <button class="linkBtn grayBtn" id="btnLogout">Logout</button>
+        <a class="linkBtn" href="/account.html">Trades</a>
+        <a class="linkBtn" href="/connect-kraken.html">Kraken</a>
       </div>
-      <div class="pill">
-        <span class="muted">USD </span><span id="usdBal" class="good" style="font-weight:bold;">0.0000</span>
-        <span class="muted" style="margin-left:10px;">Updated </span><span id="updated" class="muted"></span>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button class="linkBtn" id="manualScanBtn">Manual Scan</button>
+        <button class="linkBtn" id="logoutBtn">Logout</button>
       </div>
     </div>
 
     <div class="panel">
-      <h3>Scanner</h3>
-      <div class="controls">
-        <div class="control">
-          <div class="muted">Max scan pairs</div>
-          <input id="maxPairs" type="number" value="30" min="5" max="200" />
+      <div class="row">
+        <div>
+          <div class="muted">Scan settings</div>
+          <div style="margin-top:8px;">
+            <label class="muted">Max pairs to scan</label>
+            <input id="maxPairs" type="number" value="30" min="5" max="120" />
+          </div>
+          <div style="margin-top:8px;">
+            <label class="muted">Quality minimum</label>
+            <input id="qualityMin" type="number" value="80" min="0" max="100" />
+          </div>
+          <div style="margin-top:8px;">
+            <label class="muted">Top results to show</label>
+            <input id="topSend" type="number" value="3" min="1" max="15" />
+          </div>
+          <div style="margin-top:8px;">
+            <label class="muted">Auto scan interval minutes</label>
+            <input id="autoMinutes" type="number" value="10" min="1" max="120" />
+          </div>
+          <div class="muted" style="margin-top:10px;" id="scanStatus">Idle</div>
         </div>
-        <div class="control">
-          <div class="muted">Quality minimum</div>
-          <input id="minQuality" type="number" value="80" min="0" max="100" />
-        </div>
-        <div class="control">
-          <div class="muted">Top results</div>
-          <input id="topSend" type="number" value="10" min="1" max="50" />
-        </div>
-        <div class="control">
-          <button class="linkBtn" id="btnScan">Scan now</button>
-        </div>
-        <div class="control">
-          <button class="linkBtn grayBtn" id="btnAuto">Auto scan on</button>
+
+        <div>
+          <div class="muted">Quick actions</div>
+          <div style="margin-top:8px;">
+            <label class="muted">Open strategy page for a pair</label>
+            <select id="pairSelect"></select>
+          </div>
+          <div style="margin-top:10px; display:flex; gap:10px;">
+            <button class="smallBtn" id="openStrategyBtn">Open Strategy</button>
+            <button class="smallBtn" id="refreshPairsBtn">Refresh Pairs</button>
+          </div>
+          <div class="muted" style="margin-top:10px;">
+            Strategy opens in a new tab so you can approve without losing the dashboard.
+          </div>
         </div>
       </div>
-      <div class="muted" style="margin-top:10px;" id="scanStatus">Idle</div>
     </div>
 
-    <div class="grid2">
-      <div class="panel">
-        <h3>Safest trades</h3>
-        <div class="muted">Click a row to open its strategy page in a new tab.</div>
-        <table>
-          <thead>
-            <tr>
-              <th>Pair</th>
-              <th>Side</th>
-              <th>Quality</th>
-              <th>Entry</th>
-              <th>TP</th>
-              <th>SL</th>
-              <th>Tag</th>
-            </tr>
-          </thead>
-          <tbody id="safeBody"></tbody>
-        </table>
-      </div>
+    <div class="panel">
+      <div class="muted">Safest trades found</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Pair</th>
+            <th>Side</th>
+            <th>Quality</th>
+            <th>Entry</th>
+            <th>Take profit</th>
+            <th>Stop loss</th>
+            <th>Tag</th>
+            <th>Open</th>
+          </tr>
+        </thead>
+        <tbody id="safeBody">
+          <tr><td colspan="8" class="muted">No results yet</td></tr>
+        </tbody>
+      </table>
+    </div>
 
-      <div class="panel">
-        <h3>Status</h3>
-        <div id="statusBox">
-          <div class="kvRow"><span class="muted">Email verified</span><span class="muted">...</span></div>
-          <div class="kvRow"><span class="muted">Kraken connected</span><span class="muted">...</span></div>
-          <div class="kvRow"><span class="muted">Mode</span><span class="muted">...</span></div>
+    <div class="panel">
+      <div class="muted">All scan results</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Pair</th>
+            <th>Quality</th>
+            <th>Tag</th>
+            <th>Last</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="allBody">
+          <tr><td colspan="5" class="muted">No scan yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <div class="muted">Charts</div>
+      <div class="splitCharts chartBox">
+        <div>
+          <div class="muted">Last five hours to current</div>
+          <canvas id="chartRecent"></canvas>
         </div>
-        <div class="muted" style="margin-top:10px;">
-          If scan shows nothing, it usually means you are in chop or you do not have a fresh reclaim candle.
+        <div>
+          <div class="muted">Four year forecast view</div>
+          <canvas id="chartForecast"></canvas>
         </div>
+      </div>
+      <div class="muted" style="margin-top:10px;">
+        The charts are split because squeezing five hours and four years into one chart makes both unreadable.
       </div>
     </div>
   </div>
 
   <script>
-    let autoOn = false;
-    let autoTimer = null;
+    function prettyPair(pair) {
+      return String(pair || "").replace("X", "").replace("ZUSD", "/USD");
+    }
 
-    function apiUrl(p) { return window.location.origin + p; }
-
-    async function getJson(url) {
-      const r = await fetch(url, { credentials: "include" });
-      const t = await r.text();
-      let d = {};
-      try { d = JSON.parse(t); } catch { d = { raw: t }; }
-
-      if (!r.ok) {
-        if (r.status === 401) {
-          window.location.replace("/login.html?next=" + encodeURIComponent(window.location.pathname + window.location.search));
-          throw new Error("Unauthorized");
-        }
-        throw new Error(d.error || d.details || ("Request failed " + r.status));
-      }
-      return d;
+    function round6(n) {
+      const x = Number(n);
+      if (!Number.isFinite(x)) return "0";
+      return x.toFixed(6);
     }
 
     async function postJson(url, payload) {
       const r = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        credentials: "include"
+        credentials: "include",
+        body: JSON.stringify(payload)
       });
       const t = await r.text();
-      let d = {};
-      try { d = JSON.parse(t); } catch { d = { raw: t }; }
+      let j = {};
+      try { j = JSON.parse(t); } catch { j = { raw: t }; }
+      if (!r.ok) throw new Error(j.error || j.details || ("Request failed " + r.status));
+      return j;
+    }
 
-      if (!r.ok) {
-        if (r.status === 401) {
-          window.location.replace("/login.html?next=" + encodeURIComponent(window.location.pathname + window.location.search));
-          throw new Error("Unauthorized");
-        }
-        throw new Error(d.error || d.details || ("Request failed " + r.status));
-      }
-      return d;
+    async function getJson(url) {
+      const r = await fetch(url, { credentials: "include" });
+      const t = await r.text();
+      let j = {};
+      try { j = JSON.parse(t); } catch { j = { raw: t }; }
+      if (!r.ok) throw new Error(j.error || j.details || ("Request failed " + r.status));
+      return j;
+    }
+
+    async function krakenPublicJson(url) {
+      const r = await fetch(url);
+      const j = await r.json();
+      const err = Array.isArray(j.error) ? j.error.join(",") : "";
+      if (err) throw new Error(err);
+      return j.result || {};
     }
 
     function num(v) {
@@ -172,33 +206,25 @@
     function ema(values, period) {
       if (!Array.isArray(values) || values.length < period) return null;
       const k = 2 / (period + 1);
-
       let e = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
-      for (let i = period; i < values.length; i++) {
-        e = values[i] * k + e * (1 - k);
-      }
+      for (let i = period; i < values.length; i++) e = values[i] * k + e * (1 - k);
       return e;
     }
 
     function vwapFromCandles(candles) {
       if (!Array.isArray(candles) || !candles.length) return null;
-
       let pv = 0;
       let vol = 0;
-
       for (const c of candles) {
         const high = Number(c.high);
         const low = Number(c.low);
         const close = Number(c.close);
         const volume = Number(c.volume);
-
         if (!Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close) || !Number.isFinite(volume)) continue;
-
         const tp = (high + low + close) / 3;
         pv += tp * volume;
         vol += volume;
       }
-
       if (vol <= 0) return null;
       return pv / vol;
     }
@@ -217,80 +243,6 @@
       let m = -Infinity;
       for (let i = closes.length - n; i < closes.length; i++) m = Math.max(m, closes[i]);
       return Number.isFinite(m) ? m : null;
-    }
-
-    function round6(n) {
-      const x = Number(n);
-      if (!Number.isFinite(x)) return "0";
-      return x.toFixed(6);
-    }
-
-    function prettyPair(pair) {
-      return String(pair || "").replace("X", "").replace("ZUSD", "/USD");
-    }
-
-    async function getAllUsdPairs() {
-      const r = await fetch("https://api.kraken.com/0/public/AssetPairs");
-      const j = await r.json();
-      const result = j.result || {};
-      const pairs = [];
-
-      for (const key of Object.keys(result)) {
-        const info = result[key];
-        const wsname = info && info.wsname ? info.wsname : "";
-        if (!wsname.endsWith("/USD")) continue;
-        if (String(key).includes(".")) continue;
-        pairs.push(key);
-      }
-      return pairs;
-    }
-
-    async function fetchTickerBatch(pairsChunk) {
-      const url = "https://api.kraken.com/0/public/Ticker?pair=" + encodeURIComponent(pairsChunk.join(","));
-      const r = await fetch(url);
-      const j = await r.json();
-      return j.result || {};
-    }
-
-    async function getTopPairsByVolumeUsd(allPairs, topN) {
-      const batchSize = 20;
-      const scores = [];
-
-      for (let i = 0; i < allPairs.length; i += batchSize) {
-        const chunk = allPairs.slice(i, i + batchSize);
-        let tick = {};
-        try { tick = await fetchTickerBatch(chunk); } catch { tick = {}; }
-
-        for (const pairKey of chunk) {
-          const t = tick[pairKey];
-          if (!t) continue;
-          const last = Number(t.c && t.c[0]) || 0;
-          const vol24 = Number(t.v && t.v[1]) || 0;
-          const volUsd = last * vol24;
-          if (volUsd > 0) scores.push({ pair: pairKey, volUsd });
-        }
-      }
-
-      scores.sort((a, b) => b.volUsd - a.volUsd);
-      return scores.slice(0, topN).map(x => x.pair);
-    }
-
-    async function fetchOHLC(pair, intervalMin, candles) {
-      const url = "https://api.kraken.com/0/public/OHLC?pair=" + encodeURIComponent(pair) + "&interval=" + intervalMin;
-      const r = await fetch(url);
-      const j = await r.json();
-
-      const k = Object.keys(j.result || {}).find(x => x !== "last");
-      const arr = (k && Array.isArray(j.result[k])) ? j.result[k] : [];
-
-      return arr.slice(-(candles || 60)).map(x => ({
-        time: Number(x[0]),
-        open: Number(x[1]),
-        high: Number(x[2]),
-        low: Number(x[3]),
-        close: Number(x[4]),
-        volume: Number(x[6])
-      }));
     }
 
     function decideStrategyOrder(res, currentPrice) {
@@ -379,144 +331,277 @@
       return { quality: 0, tag: "No reclaim yet", side: null };
     }
 
-    function openStrategy(pair) {
-      const url = "/strategy.html?pair=" + encodeURIComponent(pair);
-      window.open(url, "_blank", "noopener");
+    async function getAllUsdPairs() {
+      const result = await krakenPublicJson("https://api.kraken.com/0/public/AssetPairs");
+      const pairs = [];
+      for (const key of Object.keys(result)) {
+        const info = result[key];
+        const wsname = info && info.wsname ? info.wsname : "";
+        if (!wsname.endsWith("/USD")) continue;
+        if (String(key).includes(".")) continue;
+        pairs.push(key);
+      }
+      pairs.sort();
+      return pairs;
     }
 
-    async function refreshHeader() {
-      const bal = await getJson(apiUrl("/balance"));
-      const usd = Number(bal.balance && bal.balance.ZUSD ? bal.balance.ZUSD : 0);
-      document.getElementById("usdBal").textContent = usd.toFixed(4);
-      document.getElementById("updated").textContent = new Date().toLocaleTimeString();
+    async function fetchTickerBatch(pairsChunk) {
+      const url = "https://api.kraken.com/0/public/Ticker?pair=" + encodeURIComponent(pairsChunk.join(","));
+      return await krakenPublicJson(url);
     }
 
-    async function refreshStatus() {
-      const box = document.getElementById("statusBox");
+    async function getTopPairsByVolumeUsd(allPairs, topN) {
+      const batchSize = 20;
+      const scores = [];
+      for (let i = 0; i < allPairs.length; i += batchSize) {
+        const chunk = allPairs.slice(i, i + batchSize);
+        let tick = {};
+        try { tick = await fetchTickerBatch(chunk); } catch { tick = {}; }
 
-      let account = { krakenConnected: false, emailVerified: false };
-      let mode = { simulator: false };
-
-      try { account = await getJson(apiUrl("/api/account/status")); } catch {}
-      try { mode = await getJson(apiUrl("/mode")); } catch {}
-
-      box.innerHTML =
-        "<div class='kvRow'><span class='muted'>Email verified</span><span class='" + (account.emailVerified ? "good" : "bad") + "' style='font-weight:bold;'>" + (account.emailVerified ? "Yes" : "No") + "</span></div>" +
-        "<div class='kvRow'><span class='muted'>Kraken connected</span><span class='" + (account.krakenConnected ? "good" : "bad") + "' style='font-weight:bold;'>" + (account.krakenConnected ? "Yes" : "No") + "</span></div>" +
-        "<div class='kvRow'><span class='muted'>Mode</span><span class='warn' style='font-weight:bold;'>" + (mode.simulator ? "Simulator" : "Live") + "</span></div>";
+        for (const pairKey of chunk) {
+          const t = tick[pairKey];
+          if (!t) continue;
+          const last = Number(t.c && t.c[0]) || 0;
+          const vol24 = Number(t.v && t.v[1]) || 0;
+          const volUsd = last * vol24;
+          if (volUsd > 0) scores.push({ pair: pairKey, volUsd });
+        }
+      }
+      scores.sort((a, b) => b.volUsd - a.volUsd);
+      return scores.slice(0, topN).map(x => x.pair);
     }
 
-    async function scanOnce() {
-      const status = document.getElementById("scanStatus");
-      const safeBody = document.getElementById("safeBody");
+    async function fetchOHLC(pair, intervalMin, candles) {
+      const url = "https://api.kraken.com/0/public/OHLC?pair=" + encodeURIComponent(pair) + "&interval=" + intervalMin;
+      const result = await krakenPublicJson(url);
+      const k = Object.keys(result).find(x => x !== "last");
+      const arr = (k && Array.isArray(result[k])) ? result[k] : [];
+      return arr.slice(-(candles || 60)).map(x => ({
+        time: Number(x[0]),
+        open: Number(x[1]),
+        high: Number(x[2]),
+        low: Number(x[3]),
+        close: Number(x[4]),
+        volume: Number(x[6])
+      }));
+    }
 
-      const maxPairs = Math.max(5, Math.min(200, Number(document.getElementById("maxPairs").value || 30)));
-      const minQuality = Math.max(0, Math.min(100, Number(document.getElementById("minQuality").value || 80)));
-      const topSend = Math.max(1, Math.min(50, Number(document.getElementById("topSend").value || 10)));
+    function setScanStatus(txt, cls) {
+      const el = document.getElementById("scanStatus");
+      el.className = cls ? cls : "muted";
+      el.textContent = txt;
+    }
 
-      safeBody.innerHTML = "";
-      status.textContent = "Loading pairs and market data...";
+    function setTableSafe(items) {
+      const body = document.getElementById("safeBody");
+      if (!items.length) {
+        body.innerHTML = "<tr><td colspan='8' class='muted'>No safe trades found</td></tr>";
+        return;
+      }
 
-      const allPairs = await getAllUsdPairs();
-      const topPairs = await getTopPairsByVolumeUsd(allPairs, maxPairs);
+      body.innerHTML = items.map(x => {
+        const rec = x.recommended || {};
+        const url = "/strategy.html?pair=" + encodeURIComponent(x.pair);
+        return (
+          "<tr>" +
+            "<td>" + prettyPair(x.pair) + "</td>" +
+            "<td>" + String(rec.side || "") + "</td>" +
+            "<td>" + String(rec.quality || 0) + "</td>" +
+            "<td>" + round6(rec.price ?? x.last ?? 0) + "</td>" +
+            "<td>" + round6(rec.takeProfit ?? 0) + "</td>" +
+            "<td>" + round6(rec.stopLoss ?? 0) + "</td>" +
+            "<td>" + String(rec.tag || "") + "</td>" +
+            "<td><a class='linkBtn' style='padding:8px 10px; border-radius:8px;' target='_blank' rel='noopener' href='" + url + "'>Open</a></td>" +
+          "</tr>"
+        );
+      }).join("");
+    }
+
+    function setTableAll(items) {
+      const body = document.getElementById("allBody");
+      if (!items.length) {
+        body.innerHTML = "<tr><td colspan='5' class='muted'>No scan results</td></tr>";
+        return;
+      }
+
+      body.innerHTML = items.map(x => {
+        const rec = x.recommended || {};
+        const q = Number(rec.quality || 0);
+        const status = rec.side ? "signal" : (rec.tag || "none");
+        return (
+          "<tr>" +
+            "<td>" + prettyPair(x.pair) + "</td>" +
+            "<td>" + String(q) + "</td>" +
+            "<td>" + String(rec.tag || "") + "</td>" +
+            "<td>" + round6(x.last || 0) + "</td>" +
+            "<td>" + String(status) + "</td>" +
+          "</tr>"
+        );
+      }).join("");
+    }
+
+    let chartRecent = null;
+    let chartForecast = null;
+
+    function buildCharts(recentCandles, forecastPoints) {
+      const recentLabels = recentCandles.map(c => {
+        const d = new Date(c.time * 1000);
+        return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      });
+      const recentData = recentCandles.map(c => c.close);
+
+      const ctx1 = document.getElementById("chartRecent");
+      if (chartRecent) chartRecent.destroy();
+      chartRecent = new Chart(ctx1, {
+        type: "line",
+        data: { labels: recentLabels, datasets: [{ label: "Price", data: recentData, borderWidth: 2, tension: 0.25, pointRadius: 0 }] },
+        options: { responsive: true, maintainAspectRatio: false }
+      });
+
+      const forecastLabels = forecastPoints.map(p => {
+        const d = new Date(p.timeMs);
+        return d.toLocaleDateString([], { year: "numeric", month: "short" });
+      });
+      const forecastData = forecastPoints.map(p => p.value);
+
+      const ctx2 = document.getElementById("chartForecast");
+      if (chartForecast) chartForecast.destroy();
+      chartForecast = new Chart(ctx2, {
+        type: "line",
+        data: { labels: forecastLabels, datasets: [{ label: "Forecast view", data: forecastData, borderWidth: 2, tension: 0.25, pointRadius: 0 }] },
+        options: { responsive: true, maintainAspectRatio: false }
+      });
+    }
+
+    function makeNaiveForecast(lastPrice) {
+      const pts = [];
+      const start = new Date();
+      start.setDate(1);
+      start.setHours(0, 0, 0, 0);
+
+      let v = Number(lastPrice || 0);
+      if (!Number.isFinite(v) || v <= 0) v = 1;
+
+      for (let m = 0; m < 48; m++) {
+        const d = new Date(start);
+        d.setMonth(d.getMonth() + m);
+        const wiggle = Math.sin(m / 3) * 0.02;
+        const drift = 0.0015 * m;
+        const val = v * (1 + drift + wiggle);
+        pts.push({ timeMs: d.getTime(), value: val });
+      }
+      return pts;
+    }
+
+    async function loadPairDropdown() {
+      const sel = document.getElementById("pairSelect");
+      sel.innerHTML = "<option>Loading...</option>";
+      let pairs = [];
+      try { pairs = await getAllUsdPairs(); } catch { pairs = []; }
+
+      if (!pairs.length) {
+        sel.innerHTML = "<option value=''>No pairs</option>";
+        return;
+      }
+
+      sel.innerHTML = pairs.slice(0, 250).map(p => {
+        return "<option value='" + p + "'>" + prettyPair(p) + "</option>";
+      }).join("");
+    }
+
+    async function doLogout() {
+      try { await postJson("/api/logout", {}); } catch {}
+      window.location.replace("/login.html");
+    }
+
+    async function runScan() {
+      const maxPairs = Math.max(5, Math.min(120, Number(document.getElementById("maxPairs").value || 30)));
+      const qualityMin = Math.max(0, Math.min(100, Number(document.getElementById("qualityMin").value || 80)));
+      const topSend = Math.max(1, Math.min(15, Number(document.getElementById("topSend").value || 3)));
+
+      setScanStatus("Scanning top volume USD pairs...", "warn");
+
+      let allPairs = [];
+      try { allPairs = await getAllUsdPairs(); } catch { allPairs = []; }
+
+      if (!allPairs.length) {
+        setScanStatus("Failed to load pairs from Kraken", "bad");
+        return;
+      }
+
+      let topPairs = [];
+      try { topPairs = await getTopPairsByVolumeUsd(allPairs, maxPairs); } catch { topPairs = []; }
+
+      if (!topPairs.length) {
+        setScanStatus("No top pairs returned", "bad");
+        return;
+      }
 
       const results = [];
-      let done = 0;
 
       for (const p of topPairs) {
-        done += 1;
-        status.textContent = "Scanning " + done + " of " + topPairs.length + "  " + prettyPair(p);
-
         try {
-          const [h1, h4, m5] = await Promise.all([
-            fetchOHLC(p, 60, 260),
-            fetchOHLC(p, 240, 260),
-            fetchOHLC(p, 5, 120)
-          ]);
+          const h1p = fetchOHLC(p, 60, 260);
+          const h4p = fetchOHLC(p, 240, 260);
+          const m5p = fetchOHLC(p, 5, 120);
+          const h1 = await h1p;
+          const h4 = await h4p;
+          const m5 = await m5p;
 
           const last = m5.length ? m5[m5.length - 1].close : (h1.length ? h1[h1.length - 1].close : 0);
           const rowObj = { pair: p, h1, h4, m5, last };
           rowObj.recommended = decideStrategyOrder(rowObj, last);
-
-          if (rowObj.recommended && Number(rowObj.recommended.quality || 0) >= minQuality) {
-            results.push(rowObj);
-          }
+          results.push(rowObj);
         } catch {
         }
       }
 
-      results.sort((a, b) => Number(b.recommended.quality || 0) - Number(a.recommended.quality || 0));
-      const toShow = results.slice(0, topSend);
+      results.sort((a, b) => Number(b.recommended?.quality || 0) - Number(a.recommended?.quality || 0));
 
-      if (!toShow.length) {
-        status.textContent = "No actionable safe trades right now";
-        return;
-      }
+      const safe = results.filter(x => Number(x.recommended?.quality || 0) >= qualityMin).slice(0, topSend);
 
-      for (const t of toShow) {
-        const rec = t.recommended || {};
-        const tr = document.createElement("tr");
-        tr.className = "clickable";
+      setTableAll(results);
+      setTableSafe(safe);
 
-        tr.innerHTML =
-          "<td>" + prettyPair(t.pair) + "</td>" +
-          "<td class='" + (String(rec.side) === "buy" ? "good" : "bad") + "' style='font-weight:bold;'>" + String(rec.side || "").toUpperCase() + "</td>" +
-          "<td class='warn' style='font-weight:bold;'>" + String(rec.quality || 0) + "</td>" +
-          "<td>" + round6(rec.price ?? t.last ?? 0) + "</td>" +
-          "<td>" + round6(rec.takeProfit ?? 0) + "</td>" +
-          "<td>" + round6(rec.stopLoss ?? 0) + "</td>" +
-          "<td class='muted'>" + String(rec.tag || "") + "</td>";
+      setScanStatus("Scan done. Found " + safe.length + " safe trades.", safe.length ? "ok" : "muted");
 
-        tr.addEventListener("click", () => openStrategy(t.pair));
-        safeBody.appendChild(tr);
-      }
-
-      status.textContent = "Scan complete. Click any row to open strategy.";
-
-      try {
-        await postJson("/api/alerts/safest", { safeTrades: toShow });
-      } catch {
+      const first = safe[0] || results[0];
+      if (first && first.m5 && first.m5.length) {
+        const m5 = first.m5;
+        const recent = m5.slice(-60);
+        const lastPrice = recent.length ? recent[recent.length - 1].close : first.last;
+        const forecast = makeNaiveForecast(lastPrice);
+        buildCharts(recent, forecast);
       }
     }
 
-    document.getElementById("btnScan").addEventListener("click", async () => {
-      try {
-        await refreshHeader();
-        await scanOnce();
-      } catch (e) {
-        document.getElementById("scanStatus").textContent = String(e.message || e);
-      }
-    });
+    function openStrategyForSelected() {
+      const pair = document.getElementById("pairSelect").value;
+      if (!pair) return;
+      const url = "/strategy.html?pair=" + encodeURIComponent(pair);
+      window.open(url, "_blank", "noopener");
+    }
 
-    document.getElementById("btnAuto").addEventListener("click", async () => {
-      autoOn = !autoOn;
-      const btn = document.getElementById("btnAuto");
-      btn.textContent = autoOn ? "Auto scan off" : "Auto scan on";
+    let autoTimer = null;
 
-      if (autoTimer) {
-        clearInterval(autoTimer);
-        autoTimer = null;
-      }
+    function restartAutoScan() {
+      if (autoTimer) clearInterval(autoTimer);
+      const mins = Math.max(1, Math.min(120, Number(document.getElementById("autoMinutes").value || 10)));
+      autoTimer = setInterval(() => {
+        runScan().catch(() => {});
+      }, mins * 60 * 1000);
+    }
 
-      if (autoOn) {
-        autoTimer = setInterval(async () => {
-          try {
-            await refreshHeader();
-            await scanOnce();
-          } catch {
-          }
-        }, 5 * 60 * 1000);
-      }
-    });
+    document.getElementById("logoutBtn").addEventListener("click", doLogout);
+    document.getElementById("manualScanBtn").addEventListener("click", () => runScan());
+    document.getElementById("refreshPairsBtn").addEventListener("click", () => loadPairDropdown());
+    document.getElementById("openStrategyBtn").addEventListener("click", openStrategyForSelected);
+    document.getElementById("autoMinutes").addEventListener("change", restartAutoScan);
 
-    document.getElementById("btnLogout").addEventListener("click", async () => {
-      try { await postJson("/api/logout", {}); } catch {}
-      window.location.replace("/login.html");
-    });
-
-    (async function init() {
-      await refreshStatus();
-      await refreshHeader();
+    (async () => {
+      await loadPairDropdown();
+      restartAutoScan();
+      await runScan();
     })();
   </script>
 </body>
