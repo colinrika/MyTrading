@@ -135,8 +135,6 @@ async function getUserKrakenClient(uid) {
   return new KrakenClient(row.api_key, secret);
 }
 
-
-
 function numOrNull(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
@@ -550,13 +548,55 @@ app.get("/pair-info", authRequired, async (req, res) => {
   }
 });
 
+/* Trade balance (available funds) */
+app.get("/api/trade-balance", authRequired, async (req, res) => {
+  try {
+    const client = await getUserKrakenClient(req.user.uid);
+    if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
+
+    const asset = String(req.query.asset || "ZUSD");
+    const tb = await client.api("TradeBalance", { asset });
+    const result = tb?.result || {};
+
+    const available =
+      numOrNull(result.mf) ??
+      numOrNull(result.tb) ??
+      numOrNull(result.eb) ??
+      null;
+
+    res.json({
+      ok: true,
+      asset,
+      raw: result,
+      available
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: "TradeBalance failed", details: String(err?.message || err) });
+  }
+});
+
+/* Balance (totals) plus best effort available */
 app.get("/balance", authRequired, async (req, res) => {
   try {
     const client = await getUserKrakenClient(req.user.uid);
     if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
 
     const balance = await client.api("Balance");
-    res.json({ status: "Connected", balance: balance.result });
+    let tradeBalance = null;
+
+    try {
+      const tb = await client.api("TradeBalance", { asset: "ZUSD" });
+      const r = tb?.result || {};
+      tradeBalance = {
+        asset: "ZUSD",
+        raw: r,
+        available: numOrNull(r.mf) ?? numOrNull(r.tb) ?? numOrNull(r.eb) ?? null
+      };
+    } catch {
+      tradeBalance = null;
+    }
+
+    res.json({ status: "Connected", balance: balance.result, tradeBalance });
   } catch (err) {
     res.status(500).json({ error: "Failed to connect to Kraken", details: err.message });
   }
@@ -576,190 +616,159 @@ app.get("/trades", authRequired, async (req, res) => {
     });
   }
 
-  // Price cache so you do not spam Kraken every refresh
-  const priceCache = new Map(); // pair -> { price, ts }
-  const PRICE_TTL_MS = 10 * 1000;
+  const total = filtered.length;
+  const start = (page - 1) * limit;
+  const items = filtered.slice(start, start + limit);
 
-  async function getLastPrices(pairs) {
-    const now = Date.now();
-    const out = {};
+  res.json({ page, limit, total, items });
+});
 
-    const need = [];
-    for (const p of pairs) {
-      const hit = priceCache.get(p);
-      if (hit && (now - hit.ts) < PRICE_TTL_MS) out[p] = hit.price;
-      else need.push(p);
-    }
+/* Price cache so you do not spam Kraken every refresh */
+const priceCache = new Map(); // pair -> { price, ts }
+const PRICE_TTL_MS = 10 * 1000;
 
-    if (!need.length) return out;
+async function getLastPrices(pairs) {
+  const now = Date.now();
+  const out = {};
 
-    const url = "https://api.kraken.com/0/public/Ticker?pair=" + encodeURIComponent(need.join(","));
-    const r = await fetch(url);
-    const j = await r.json().catch(() => ({}));
-    const result = j.result || {};
-
-    // Kraken may return canonical keys, so map best effort
-    for (const [k, v] of Object.entries(result)) {
-      const last = Number(v?.c?.[0]);
-      if (Number.isFinite(last)) {
-        priceCache.set(k, { price: last, ts: now });
-        out[k] = last;
-      }
-    }
-
-    // Also try to fill requested keys if they differ
-    for (const p of need) {
-      if (out[p] !== undefined) continue;
-      // attempt match by stripping slash, etc
-      const needle = String(p).replace("/", "");
-      const foundKey = Object.keys(out).find(x => String(x).replace("/", "") === needle);
-      if (foundKey) out[p] = out[foundKey];
-    }
-
-    return out;
+  const need = [];
+  for (const p of pairs) {
+    const hit = priceCache.get(p);
+    if (hit && (now - hit.ts) < PRICE_TTL_MS) out[p] = hit.price;
+    else need.push(p);
   }
 
-  // 1) Batch prices for account page
-  app.get("/api/prices", authRequired, async (req, res) => {
-    try {
-      const raw = String(req.query.pairs || "");
-      const pairs = raw.split(",").map(s => s.trim()).filter(Boolean);
-      if (!pairs.length) return res.json({ ok: true, prices: {} });
+  if (!need.length) return out;
 
-      const prices = await getLastPrices(pairs);
-      return res.json({ ok: true, prices });
-    } catch (e) {
-      return res.status(500).json({ ok: false, error: String(e.message || e) });
+  const url = "https://api.kraken.com/0/public/Ticker?pair=" + encodeURIComponent(need.join(","));
+  const r = await fetch(url);
+  const j = await r.json().catch(() => ({}));
+  const result = j.result || {};
+
+  for (const [k, v] of Object.entries(result)) {
+    const last = Number(v?.c?.[0]);
+    if (Number.isFinite(last)) {
+      priceCache.set(k, { price: last, ts: now });
+      out[k] = last;
     }
-  });
+  }
 
-  // 2) Live order status by txid
-  app.get("/api/order/status", authRequired, async (req, res) => {
-    try {
-      const txid = String(req.query.txid || "").trim();
-      if (!txid) return res.status(400).json({ ok: false, error: "txid required" });
+  for (const p of need) {
+    if (out[p] !== undefined) continue;
+    const needle = String(p).replace("/", "");
+    const foundKey = Object.keys(out).find(x => String(x).replace("/", "") === needle);
+    if (foundKey) out[p] = out[foundKey];
+  }
 
-      const mine = tradeLog.find(t => String(t.userId) === String(req.user.uid) && String(t.txid) === txid);
-      if (!mine) return res.status(404).json({ ok: false, error: "Order not found" });
+  return out;
+}
 
-      if (SIMULATOR_MODE) {
-        return res.json({
-          ok: true,
-          status: mine.status || "simulated",
-          vol_exec: "0.0",
-          price: mine.entryPrice ?? null
-        });
-      }
+/* Batch prices for account page */
+app.get("/api/prices", authRequired, async (req, res) => {
+  try {
+    const raw = String(req.query.pairs || "");
+    const pairs = raw.split(",").map(s => s.trim()).filter(Boolean);
+    if (!pairs.length) return res.json({ ok: true, prices: {} });
 
-      const client = await getUserKrakenClient(req.user.uid);
-      if (!client) return res.status(400).json({ ok: false, error: "No Kraken keys saved" });
+    const prices = await getLastPrices(pairs);
+    return res.json({ ok: true, prices });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
 
-      const o = await queryOrder(client, txid);
-      if (!o) return res.json({ ok: true, status: "unknown" });
+/* Live order status by txid */
+app.get("/api/order/status", authRequired, async (req, res) => {
+  try {
+    const txid = String(req.query.txid || "").trim();
+    if (!txid) return res.status(400).json({ ok: false, error: "txid required" });
 
-      const status = String(o.status || "");
-      const vol_exec = String(o.vol_exec || "0");
-      const price = Number(o.price || 0);
+    const mine = tradeLog.find(t => String(t.userId) === String(req.user.uid) && String(t.txid) === txid);
+    if (!mine) return res.status(404).json({ ok: false, error: "Order not found" });
 
-      // Keep your local log somewhat honest
-      if (status) mine.status = status;
-
+    if (SIMULATOR_MODE) {
       return res.json({
         ok: true,
-        status,
-        vol: String(o.vol || ""),
-        vol_exec,
-        price: Number.isFinite(price) ? price : null,
-        descr: o.descr || null
+        status: mine.status || "simulated",
+        vol_exec: "0.0",
+        price: mine.entryPrice ?? null
       });
-    } catch (e) {
-      return res.status(500).json({ ok: false, error: String(e.message || e) });
     }
-  });
 
-  // 3) Cancel an open order
-  app.post("/api/order/cancel", authRequired, async (req, res) => {
-    try {
-      const txid = String(req.body?.txid || "").trim();
-      if (!txid) return res.status(400).json({ ok: false, error: "txid required" });
+    const client = await getUserKrakenClient(req.user.uid);
+    if (!client) return res.status(400).json({ ok: false, error: "No Kraken keys saved" });
 
-      const mine = tradeLog.find(t => String(t.userId) === String(req.user.uid) && String(t.txid) === txid);
-      if (!mine) return res.status(404).json({ ok: false, error: "Order not found" });
+    const o = await queryOrder(client, txid);
+    if (!o) return res.json({ ok: true, status: "unknown" });
 
-      if (SIMULATOR_MODE) {
-        mine.status = "canceled";
-        return res.json({ ok: true, canceled: true, simulator: true });
-      }
+    const status = String(o.status || "");
+    const vol_exec = String(o.vol_exec || "0");
+    const price = Number(o.price || 0);
 
-      const client = await getUserKrakenClient(req.user.uid);
-      if (!client) return res.status(400).json({ ok: false, error: "No Kraken keys saved" });
+    if (status) mine.status = status;
 
-      const resp = await client.api("CancelOrder", { txid });
-      const count = Number(resp?.result?.count || 0);
+    return res.json({
+      ok: true,
+      status,
+      vol: String(o.vol || ""),
+      vol_exec,
+      price: Number.isFinite(price) ? price : null,
+      descr: o.descr || null
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
 
-      if (count > 0) mine.status = "canceled";
+/* Cancel an open order */
+app.post("/api/order/cancel", authRequired, async (req, res) => {
+  try {
+    const txid = String(req.body?.txid || "").trim();
+    if (!txid) return res.status(400).json({ ok: false, error: "txid required" });
 
-      return res.json({ ok: true, canceled: count > 0, result: resp?.result || {} });
-    } catch (e) {
-      return res.status(500).json({ ok: false, error: String(e.message || e) });
+    const mine = tradeLog.find(t => String(t.userId) === String(req.user.uid) && String(t.txid) === txid);
+    if (!mine) return res.status(404).json({ ok: false, error: "Order not found" });
+
+    if (SIMULATOR_MODE || String(txid).startsWith("SIM_")) {
+      mine.status = "canceled";
+      return res.json({ ok: true, canceled: true, simulator: true });
     }
-  });
 
-  // 4) Close immediately using a market order
-  app.post("/api/order/close", authRequired, async (req, res) => {
-    try {
-      const tradeId = Number(req.body?.tradeId || 0);
-      if (!tradeId) return res.status(400).json({ ok: false, error: "tradeId required" });
+    const client = await getUserKrakenClient(req.user.uid);
+    if (!client) return res.status(400).json({ ok: false, error: "No Kraken keys saved" });
 
-      const mine = tradeLog.find(t => Number(t.id) === tradeId && String(t.userId) === String(req.user.uid));
-      if (!mine) return res.status(404).json({ ok: false, error: "Trade not found" });
+    const resp = await client.api("CancelOrder", { txid });
+    const count = Number(resp?.result?.count || 0);
 
-      const pair = String(mine.pair || "");
-      const volume = String(mine.volume || "");
-      const entrySide = String(mine.side || "").toLowerCase();
+    if (count > 0) mine.status = "canceled";
 
-      if (!pair || !volume || Number(volume) <= 0) {
-        return res.status(400).json({ ok: false, error: "Missing pair or volume on this trade" });
-      }
+    return res.json({ ok: true, canceled: count > 0, result: resp?.result || {} });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
 
-      const closeSide = entrySide === "buy" ? "sell" : "buy";
+/* Close immediately using a market order */
+app.post("/api/order/close", authRequired, async (req, res) => {
+  try {
+    const tradeId = Number(req.body?.tradeId || 0);
+    if (!tradeId) return res.status(400).json({ ok: false, error: "tradeId required" });
 
-      if (SIMULATOR_MODE) {
-        mine.status = "closed_by_user";
-        logTrade({
-          pair,
-          side: closeSide,
-          orderType: "market",
-          investUsd: null,
-          volume,
-          entryPrice: null,
-          takeProfit: null,
-          stopLoss: null,
-          status: "simulated",
-          message: "Simulator close. No Kraken order was placed.",
-          txid: "SIM_CLOSE_" + Date.now(),
-          isAuto: false,
-          userId: req.user.uid
-        });
+    const mine = tradeLog.find(t => Number(t.id) === tradeId && String(t.userId) === String(req.user.uid));
+    if (!mine) return res.status(404).json({ ok: false, error: "Trade not found" });
 
-        return res.json({ ok: true, closed: true, simulator: true });
-      }
+    const pair = String(mine.pair || "");
+    const volume = String(mine.volume || "");
+    const entrySide = String(mine.side || "").toLowerCase();
 
-      const client = await getUserKrakenClient(req.user.uid);
-      if (!client) return res.status(400).json({ ok: false, error: "No Kraken keys saved" });
+    if (!pair || !volume || Number(volume) <= 0) {
+      return res.status(400).json({ ok: false, error: "Missing pair or volume on this trade" });
+    }
 
-      const closeParams = {
-        pair,
-        type: closeSide,
-        ordertype: "market",
-        volume
-      };
+    const closeSide = entrySide === "buy" ? "sell" : "buy";
 
-      const resp = await client.api("AddOrder", closeParams);
-      const txid = Array.isArray(resp?.result?.txid) ? resp.result.txid[0] : "";
-
+    if (SIMULATOR_MODE) {
       mine.status = "closed_by_user";
-
       logTrade({
         pair,
         side: closeSide,
@@ -769,25 +778,51 @@ app.get("/trades", authRequired, async (req, res) => {
         entryPrice: null,
         takeProfit: null,
         stopLoss: null,
-        status: "submitted",
-        message: "Close sent as market order",
-        txid,
+        status: "simulated",
+        message: "Simulator close. No Kraken order was placed.",
+        txid: "SIM_CLOSE_" + Date.now(),
         isAuto: false,
         userId: req.user.uid
       });
 
-      return res.json({ ok: true, closed: true, txid });
-    } catch (e) {
-      return res.status(500).json({ ok: false, error: String(e.message || e) });
+      return res.json({ ok: true, closed: true, simulator: true });
     }
-  });
 
+    const client = await getUserKrakenClient(req.user.uid);
+    if (!client) return res.status(400).json({ ok: false, error: "No Kraken keys saved" });
 
-  const total = filtered.length;
-  const start = (page - 1) * limit;
-  const items = filtered.slice(start, start + limit);
+    const closeParams = {
+      pair,
+      type: closeSide,
+      ordertype: "market",
+      volume
+    };
 
-  res.json({ page, limit, total, items });
+    const resp = await client.api("AddOrder", closeParams);
+    const txid = Array.isArray(resp?.result?.txid) ? resp.result.txid[0] : "";
+
+    mine.status = "closed_by_user";
+
+    logTrade({
+      pair,
+      side: closeSide,
+      orderType: "market",
+      investUsd: null,
+      volume,
+      entryPrice: null,
+      takeProfit: null,
+      stopLoss: null,
+      status: "submitted",
+      message: "Close sent as market order",
+      txid,
+      isAuto: false,
+      userId: req.user.uid
+    });
+
+    return res.json({ ok: true, closed: true, txid });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
 });
 
 /* Alerts endpoint called by dashboard */
@@ -961,6 +996,46 @@ app.post("/trade", authRequired, async (req, res) => {
       });
     }
 
+    /* Helpful funds check before AddOrder */
+    if (String(side).toLowerCase() === "buy") {
+      let availableUsd = null;
+      try {
+        const tb = await client.api("TradeBalance", { asset: "ZUSD" });
+        const r = tb?.result || {};
+        availableUsd = numOrNull(r.mf) ?? numOrNull(r.tb) ?? numOrNull(r.eb) ?? null;
+      } catch {
+        availableUsd = null;
+      }
+
+      if (availableUsd !== null) {
+        const feeBufferRate = 0.01;
+        const required = (volNum * entryPrice) * (1 + feeBufferRate);
+        if (required > availableUsd + 1e-10) {
+          const msg = "Insufficient available ZUSD for this buy. Your funds might be in another asset, or not available for trading.";
+          logTrade({
+            pair, side, orderType, investUsd,
+            volume: volumeStr,
+            entryPrice,
+            takeProfit,
+            stopLoss,
+            estProfitUsd,
+            estLossUsd,
+            status: "rejected",
+            message: msg + " Available " + availableUsd.toFixed(4) + " Required about " + required.toFixed(4),
+            isAuto: raw.isAuto === true,
+            userId: req.user.uid
+          });
+
+          return res.status(400).json({
+            error: "Insufficient funds",
+            hint: msg,
+            availableZUSD: availableUsd,
+            requiredZUSDApprox: required
+          });
+        }
+      }
+    }
+
     const mainOrder = await client.api("AddOrder", entryParams);
     const txid = Array.isArray(mainOrder?.result?.txid) ? mainOrder.result.txid[0] : "";
 
@@ -1056,7 +1131,6 @@ app.post("/api/orders/cancel", authRequired, async (req, res) => {
     return res.status(500).json({ ok: false, error: "Cancel failed", details: combined });
   }
 });
-
 
 /* JSON parse guard */
 app.use((err, req, res, next) => {

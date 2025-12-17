@@ -302,7 +302,7 @@
   <div class="topBar">
     <div class="pill">
       <span class="warn">Live trading</span>
-      <span class="muted" id="usdQuick">USD loading</span>
+      <span class="muted" id="usdQuick">ZUSD loading</span>
       <span class="muted" id="modeBadge"></span>
       <span class="muted" id="authBadge"></span>
     </div>
@@ -389,19 +389,6 @@
       const badge = document.getElementById("aggressiveBadge");
       if (cb) cb.checked = AGGRESSIVE_MODE;
       if (badge) badge.textContent = AGGRESSIVE_MODE ? "On" : "Off";
-    }
-
-    function nextTradeWindowText() {
-      const now = new Date();
-      const h = now.getHours();
-      if (h >= 5 && h < 9) return "Trade window is open now";
-      const next = new Date(now);
-      if (h >= 9) next.setDate(now.getDate() + 1);
-      next.setHours(5, 0, 0, 0);
-      const mins = Math.max(0, Math.round((next.getTime() - now.getTime()) / 60000));
-      const hrs = Math.floor(mins / 60);
-      const rem = mins % 60;
-      return "Trade window opens at 5 AM. Time until open " + hrs + " hours " + rem + " minutes";
     }
 
     let intervalIds = [];
@@ -627,12 +614,6 @@
       return (predChange * 2) + (trendSlope * 10) + bonusMidRsi - penaltyOverbought;
     }
 
-    function isTradeWindow() {
-      const now = new Date();
-      const hour = now.getHours();
-      return hour >= 5 && hour < 9;
-    }
-
     function ema(values, period) {
       if (!Array.isArray(values) || values.length < period) return null;
       const k = 2 / (period + 1);
@@ -739,7 +720,6 @@
       const downBias = lastH1 < ema200H1 && lastH4 < ema200H4;
 
       const m5Ema20Series = emaSeries(m5Closes, 20);
-      const m5Ema20 = m5Ema20Series[m5Ema20Series.length - 1];
       const m5Vwap = vwapFromCandles(m5);
 
       const explainBase =
@@ -949,10 +929,13 @@
       if (loggedOut) return;
       try {
         const d = await getJson(apiUrl("/balance"));
-        const usd = Number(d.balance?.ZUSD || 0);
-        document.getElementById("usdQuick").textContent = "USD " + usd.toFixed(4) + " updated " + new Date().toLocaleTimeString();
+        const totalZusd = Number(d.balance?.ZUSD || 0);
+        const avail = Number(d.tradeBalance?.available ?? totalZusd);
+        const ts = new Date().toLocaleTimeString();
+        document.getElementById("usdQuick").textContent =
+          "ZUSD available " + avail.toFixed(4) + " total " + totalZusd.toFixed(4) + " updated " + ts;
       } catch {
-        document.getElementById("usdQuick").textContent = "USD unavailable";
+        document.getElementById("usdQuick").textContent = "ZUSD unavailable";
       }
     }
 
@@ -1127,8 +1110,9 @@
     }
 
     async function computeEstimates(entryPrice, tp, sl) {
-      const bal = await getJson(apiUrl("/balance"));
-      const usd = Number(bal.balance?.ZUSD || 0);
+      const d = await getJson(apiUrl("/balance"));
+      const totalZusd = Number(d.balance?.ZUSD || 0);
+      const available = Number(d.tradeBalance?.available ?? totalZusd);
 
       const amtEl = document.getElementById("tradeAmount");
       const pctEl = document.getElementById("investSelect");
@@ -1136,25 +1120,26 @@
       const amt = Number(amtEl.value || 0);
       const pct = Number(pctEl.value || 0);
 
-      const invest = (amt > 0) ? amt : (usd * (pct / 100));
+      const invest = (amt > 0) ? amt : (available * (pct / 100));
       const qty = invest > 0 ? (invest / entryPrice) : 0;
 
       const estProfit = (tp - entryPrice) * qty;
       const estLoss = (entryPrice - sl) * qty;
 
-      return { usd, invest, qty, estProfit, estLoss };
+      return { totalZusd, available, invest, qty, estProfit, estLoss };
     }
 
     async function placeOrder(pair, side, price, opts, isAuto) {
       const tp = Number(document.getElementById("tpInput")?.value || 0);
       const sl = Number(document.getElementById("slInput")?.value || 0);
 
-      const bal = await getJson(apiUrl("/balance"));
-      const usd = Number(bal.balance?.ZUSD || 0);
+      const d = await getJson(apiUrl("/balance"));
+      const totalZusd = Number(d.balance?.ZUSD || 0);
+      const available = Number(d.tradeBalance?.available ?? totalZusd);
 
       const amt = Number(document.getElementById("tradeAmount")?.value || 0);
       const pct = Number(document.getElementById("investSelect")?.value || 0);
-      const invest = (amt > 0) ? amt : (usd * (pct / 100));
+      const invest = (amt > 0) ? amt : (available * (pct / 100));
 
       const payload = {
         pair,
@@ -1219,7 +1204,7 @@
         "<div class='muted'>Take profit</div><input id='tpInput' type='number' value='" + chartBuilt.tp.toFixed(6) + "'>" +
         "<div class='muted' style='margin-top:10px;'>Stop loss</div><input id='slInput' type='number' value='" + chartBuilt.sl.toFixed(6) + "'>" +
         "<div class='muted' style='margin-top:10px;'>Trade amount USD</div><input id='tradeAmount' type='number' value='5'>" +
-        "<div class='muted' style='margin-top:10px;'>Or percent of USD</div>" +
+        "<div class='muted' style='margin-top:10px;'>Or percent of available ZUSD</div>" +
         "<select id='investSelect'>" +
         "<option value='10'>10</option>" +
         "<option value='25'>25</option>" +
@@ -1231,10 +1216,10 @@
         "<div>" +
         "<div class='muted'>Strategy order preview</div>" +
         "<div id='orderPreviewBox' class='profitBox'></div>" +
-        "<div class='muted' style='margin-top:10px;'>Balance and profit estimate</div>" +
+        "<div class='muted' style='margin-top:10px;'>Available funds and estimate</div>" +
         "<div id='estimateBox' class='profitBox'></div>" +
         "<button id='btnApprove' class='primaryBtn' " + (rec ? "" : "disabled") + ">✅ Approve Strategy</button>" +
-        "<div class='muted' style='margin-top:8px;'>Live trades may place exits only after entry fills.</div>" +
+        "<div class='muted' style='margin-top:8px;'>If Kraken says insufficient funds, you probably do not have enough available ZUSD for this pair.</div>" +
         "</div>" +
         "</div>" +
         "</div>";
@@ -1258,7 +1243,7 @@
             const amt = Number(document.getElementById("tradeAmount").value || 0);
             const pct = Number(document.getElementById("investSelect").value || 0);
 
-            const modeTxt = (amt > 0) ? "Fixed USD" : ("Percent of USD " + pct.toFixed(0) + " percent");
+            const modeTxt = (amt > 0) ? "Fixed USD" : ("Percent of available ZUSD " + pct.toFixed(0) + " percent");
 
             const sideTxt = rec ? String(rec.side).toUpperCase() : "N A";
             const typeTxt = rec ? String(rec.orderType) : "N A";
@@ -1281,21 +1266,23 @@
 
           const minUsd = calcMinUsd(pairInfo, entryPrice);
           const tooSmall = (minUsd > 0 && est.invest > 0 && est.invest < minUsd);
-          const overBalance = (est.invest > est.usd);
+          const overAvail = (est.invest > est.available);
 
           estimateBox.innerHTML =
-            "<div class='muted'>USD balance</div><div class='good' style='font-weight:bold; font-size:16px;'>" + est.usd.toFixed(4) + "</div>" +
-            "<div class='muted' style='margin-top:8px;'>Buy amount</div><div class='" + (overBalance ? "bad" : (tooSmall ? "bad" : "warn")) + "' style='font-weight:bold; font-size:16px;'>" + est.invest.toFixed(2) + "</div>" +
+            "<div class='muted'>Available ZUSD</div><div class='good' style='font-weight:bold; font-size:16px;'>" + est.available.toFixed(4) + "</div>" +
+            "<div class='muted' style='margin-top:6px;'>Total ZUSD</div><div class='muted' style='font-weight:bold; font-size:14px;'>" + est.totalZusd.toFixed(4) + "</div>" +
+            "<div class='muted' style='margin-top:8px;'>Buy amount</div><div class='" + (overAvail ? "bad" : (tooSmall ? "bad" : "warn")) + "' style='font-weight:bold; font-size:16px;'>" + est.invest.toFixed(2) + "</div>" +
             (minUsd > 0
               ? "<div class='muted' style='margin-top:8px;'>Minimum for this pair</div><div class='" + (tooSmall ? "bad" : "muted") + "' style='font-weight:bold; font-size:14px;'>" + minUsd.toFixed(2) + " USD</div>"
               : "") +
             "<div class='muted' style='margin-top:8px;'>Estimated profit at TP</div><div class='good' style='font-weight:bold; font-size:16px;'>" + est.estProfit.toFixed(4) + " USD</div>" +
             "<div class='muted' style='margin-top:8px;'>Estimated loss at SL</div><div class='bad' style='font-weight:bold; font-size:16px;'>" + est.estLoss.toFixed(4) + " USD</div>" +
             "<div class='muted' style='margin-top:6px;'>Estimates ignore fees and slippage.</div>" +
-            (tooSmall ? "<div class='bad' style='margin-top:10px; font-weight:bold;'>Buy amount is below minimum. Increase to at least " + minUsd.toFixed(2) + " USD.</div>" : "");
+            (tooSmall ? "<div class='bad' style='margin-top:10px; font-weight:bold;'>Buy amount is below minimum. Increase to at least " + minUsd.toFixed(2) + " USD.</div>" : "") +
+            (overAvail ? "<div class='bad' style='margin-top:10px; font-weight:bold;'>Buy amount is above available ZUSD. If your funds are in another asset, convert to USD or use a matching pair.</div>" : "");
 
           if (approveBtn) {
-            approveBtn.disabled = (!rec) || tooSmall || (est.invest <= 0) || overBalance;
+            approveBtn.disabled = (!rec) || tooSmall || (est.invest <= 0) || overAvail;
           }
         } catch {
           estimateBox.innerHTML = "<div class='bad'>Unable to load estimate</div>";
@@ -1318,15 +1305,24 @@
           approveBtn.textContent = "Sending order...";
 
           try {
-            const bal = await getJson(apiUrl("/balance"));
-            const usd = Number(bal.balance?.ZUSD || 0);
+            const d = await getJson(apiUrl("/balance"));
+            const totalZusd = Number(d.balance?.ZUSD || 0);
+            const available = Number(d.tradeBalance?.available ?? totalZusd);
+
             const amt = Number(document.getElementById("tradeAmount").value || 0);
             const pct = Number(document.getElementById("investSelect").value || 0);
-            const invest = (amt > 0) ? amt : (usd * (pct / 100));
+            const invest = (amt > 0) ? amt : (available * (pct / 100));
 
             const minUsd = calcMinUsd(pairInfo, chartBuilt.entry);
             if (minUsd > 0 && invest < minUsd) {
               alert("Minimum for this pair is " + minUsd.toFixed(2) + " USD. Increase buy amount.");
+              approveBtn.disabled = false;
+              approveBtn.textContent = "✅ Approve Strategy";
+              return;
+            }
+
+            if (invest > available) {
+              alert("Not enough available ZUSD. Available " + available.toFixed(4) + " Invest " + invest.toFixed(2));
               approveBtn.disabled = false;
               approveBtn.textContent = "✅ Approve Strategy";
               return;
@@ -1474,11 +1470,6 @@
         item.addEventListener("click", () => showStrategyModal(r));
         safeListEl.appendChild(item);
       }
-    }
-
-    async function autoTradeCycle() {
-      if (!AUTO_TRADING_ALWAYS_ON) return;
-      if (loggedOut) return;
     }
 
     document.getElementById("aggressiveToggle")?.addEventListener("change", (e) => {
