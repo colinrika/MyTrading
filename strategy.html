@@ -99,6 +99,25 @@
       return u.searchParams.get(name);
     }
 
+    function parseTotalZusd(resp) {
+      const total = Number(resp?.balance?.ZUSD);
+      return Number.isFinite(total) ? total : 0;
+    }
+
+    function parseAvailableZusd(resp) {
+      const candidates = [
+        Number(resp?.availableZusd),
+        Number(resp?.tradeBalance?.mf),
+        Number(resp?.tradeBalance?.tb),
+        Number(resp?.tradeBalance?.eb),
+        Number(resp?.tradeBalance?.e)
+      ];
+      for (const v of candidates) {
+        if (Number.isFinite(v)) return v;
+      }
+      return parseTotalZusd(resp);
+    }
+
     function redirectToLoginWithNext() {
       const next = window.location.pathname + window.location.search;
       window.location.replace("/login.html?next=" + encodeURIComponent(next));
@@ -165,9 +184,9 @@
           document.getElementById("usdQuick").textContent = "";
           return;
         }
-        const totalZusd = Number(d.balance && d.balance.ZUSD ? d.balance.ZUSD : 0);
-        const avail = Number(d.tradeBalance && d.tradeBalance.available !== undefined ? d.tradeBalance.available : totalZusd);
-        document.getElementById("usdQuick").textContent = "ZUSD " + avail.toFixed(4);
+        const totalZusd = parseTotalZusd(d);
+        const avail = parseAvailableZusd(d);
+        document.getElementById("usdQuick").textContent = "ZUSD " + avail.toFixed(4) + " / " + totalZusd.toFixed(4);
       } catch {
         document.getElementById("usdQuick").textContent = "";
       }
@@ -572,9 +591,13 @@
     }
 
     async function computeEstimates(entryPrice, tp, sl) {
-      const d = await getJson(apiUrl("/balance"));
-      const totalZusd = Number(d.balance && d.balance.ZUSD ? d.balance.ZUSD : 0);
-      const available = Number(d.tradeBalance && d.tradeBalance.available !== undefined ? d.tradeBalance.available : totalZusd);
+      const d = await getJson(apiUrl("/balance"), true);
+      if (d && d.__unauth) {
+        return { totalZusd: 0, available: 0, invest: 0, qty: 0, estProfit: 0, estLoss: 0, __unauth: true };
+      }
+
+      const totalZusd = parseTotalZusd(d);
+      const available = parseAvailableZusd(d);
 
       const amtEl = document.getElementById("tradeAmount");
       const pctEl = document.getElementById("investSelect");
@@ -596,8 +619,8 @@
       const sl = Number(document.getElementById("slInput") ? document.getElementById("slInput").value : 0);
 
       const d = await getJson(apiUrl("/balance"));
-      const totalZusd = Number(d.balance && d.balance.ZUSD ? d.balance.ZUSD : 0);
-      const available = Number(d.tradeBalance && d.tradeBalance.available !== undefined ? d.tradeBalance.available : totalZusd);
+      const totalZusd = parseTotalZusd(d);
+      const available = parseAvailableZusd(d);
 
       const amt = Number(document.getElementById("tradeAmount") ? document.getElementById("tradeAmount").value : 0);
       const pct = Number(document.getElementById("investSelect") ? document.getElementById("investSelect").value : 0);
@@ -719,10 +742,22 @@
         const tp = Number(document.getElementById("tpInput").value);
         const sl = Number(document.getElementById("slInput").value);
 
-        const isLogged = await ensureLoggedInSoft();
+        let isLogged = await ensureLoggedInSoft();
         if (!isLogged) document.getElementById("usdQuick").textContent = "";
 
-        const est = isLogged ? await computeEstimates(entryPrice, tp, sl) : { available: 0, totalZusd: 0 };
+        let est = { available: 0, totalZusd: 0, invest: 0, qty: 0, estProfit: 0, estLoss: 0 };
+        if (isLogged) {
+          try {
+            const calc = await computeEstimates(entryPrice, tp, sl);
+            if (calc && calc.__unauth) {
+              isLogged = false;
+            } else if (calc) {
+              est = calc;
+            }
+          } catch (e) {
+            console.error("Estimate refresh failed", e);
+          }
+        }
 
         const amt = Number(document.getElementById("tradeAmount").value || 0);
         const pct = Number(document.getElementById("investSelect").value || 0);
@@ -778,8 +813,8 @@
 
         try {
           const d = await getJson(apiUrl("/balance"));
-          const totalZusd = Number(d.balance && d.balance.ZUSD ? d.balance.ZUSD : 0);
-          const available = Number(d.tradeBalance && d.tradeBalance.available !== undefined ? d.tradeBalance.available : totalZusd);
+          const totalZusd = parseTotalZusd(d);
+          const available = parseAvailableZusd(d);
 
           const amt = Number(document.getElementById("tradeAmount").value || 0);
           const pct = Number(document.getElementById("investSelect").value || 0);
