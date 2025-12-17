@@ -27,15 +27,17 @@
     input { border-radius: 10px; border: 1px solid #30363d; background: #0d1117; color: #e6edf3; padding: 10px 12px; width: 280px; }
     button { border-radius: 10px; border: none; padding: 10px 12px; font-weight: bold; cursor: pointer; background: #30363d; color: #e6edf3; }
     button:hover { filter: brightness(1.05); }
-    button.actionBtn { padding: 8px 10px; border-radius: 8px; }
-    button.cancelBtn { background: #7a2e2e; }
-    button.closeBtn { background: #2e5a7a; }
+    button.danger { background: #7a1f1f; }
+    button.primary { background: #58a6ff; color: #fff; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
 
     table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-    th, td { padding: 10px; border: 1px solid #30363d; vertical-align: top; }
+    th, td { padding: 10px; border: 1px solid #30363d; }
     th { background: #0d1117; text-align: left; }
 
     .pager { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
   </style>
 </head>
 <body>
@@ -52,6 +54,7 @@
       <div id="balanceLines">
         <div class="kv"><span class="muted">Loading balance</span><span class="muted">...</span></div>
       </div>
+      <div class="muted" style="margin-top:8px;" id="availText"></div>
     </div>
 
     <div class="panel">
@@ -132,6 +135,7 @@
         body: JSON.stringify(payload),
         credentials: "include"
       });
+
       const t = await r.text();
       let d = {};
       try { d = JSON.parse(t); } catch { d = { raw: t }; }
@@ -153,13 +157,14 @@
       return x.toFixed(d);
     }
 
-    function isActionableStatus(s) {
-      const st = String(s || "").toLowerCase();
-      if (!st) return false;
-      if (st.includes("canceled")) return false;
-      if (st.includes("closed")) return false;
-      if (st.includes("filled")) return false;
-      if (st.includes("closed_by_user")) return false;
+    function canCancel(status) {
+      const s = String(status || "").toLowerCase();
+      return s.includes("open") || s.includes("pending") || s.includes("submitted") || s.includes("partial");
+    }
+
+    function canClose(status) {
+      const s = String(status || "").toLowerCase();
+      if (s.includes("closed") || s.includes("canceled") || s.includes("cancelled") || s.includes("rejected")) return false;
       return true;
     }
 
@@ -182,10 +187,18 @@
           wrap.appendChild(row);
         }
 
+        const avail = Number(d.tradeBalance?.available);
+        if (Number.isFinite(avail)) {
+          document.getElementById("availText").textContent = "Available ZUSD for trading " + avail.toFixed(4);
+        } else {
+          document.getElementById("availText").textContent = "";
+        }
+
         document.getElementById("updatedText").textContent = "Updated " + new Date().toLocaleTimeString();
       } catch (e) {
         document.getElementById("balanceLines").innerHTML =
           "<div class='kv'><span class='bad'>Balance error</span><span class='bad'>" + String(e.message) + "</span></div>";
+        document.getElementById("availText").textContent = "";
       }
     }
 
@@ -215,15 +228,57 @@
         const grossCls = gross > 0 ? "good" : (gross < 0 ? "bad" : "muted");
         const netCls = net > 0 ? "good" : (net < 0 ? "bad" : "muted");
 
-        const canAct = isActionableStatus(t.status);
-        const hasTx = String(t.txid || "").trim().length > 0;
+        const txid = String(t.txid || "");
+        const status = String(t.status || "");
 
-        const actionsHtml = canAct
-          ? (
-              (hasTx ? "<button class='actionBtn cancelBtn' data-txid='" + String(t.txid) + "'>Cancel</button>" : "") +
-              "<button class='actionBtn closeBtn' data-tradeid='" + String(t.id) + "' style='margin-left:8px;'>Close now</button>"
-            )
-          : "<span class='muted'>None</span>";
+        const actionWrap = document.createElement("div");
+        actionWrap.className = "actions";
+
+        const cancelBtn = document.createElement("button");
+        cancelBtn.textContent = "Cancel";
+        cancelBtn.className = "danger";
+        cancelBtn.disabled = !txid || !canCancel(status);
+
+        cancelBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          if (!txid) return;
+          const ok = confirm("Cancel this order " + txid + " ?");
+          if (!ok) return;
+
+          cancelBtn.disabled = true;
+          try {
+            const r = await postJson(apiUrl("/api/order/cancel"), { txid });
+            alert(r && r.canceled ? "Canceled" : "Cancel request sent");
+            await refreshTrades();
+          } catch (err) {
+            alert(String(err.message || err));
+            cancelBtn.disabled = false;
+          }
+        });
+
+        const closeBtn = document.createElement("button");
+        closeBtn.textContent = "Sell now";
+        closeBtn.className = "primary";
+        closeBtn.disabled = !canClose(status);
+
+        closeBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const ok = confirm("Close this trade now using a market order?");
+          if (!ok) return;
+
+          closeBtn.disabled = true;
+          try {
+            const r = await postJson(apiUrl("/api/order/close"), { tradeId: Number(t.id) });
+            alert(r && r.closed ? "Close sent" : "Close requested");
+            await refreshTrades();
+          } catch (err) {
+            alert(String(err.message || err));
+            closeBtn.disabled = false;
+          }
+        });
+
+        actionWrap.appendChild(cancelBtn);
+        actionWrap.appendChild(closeBtn);
 
         tr.innerHTML =
           "<td>" + (t.time ? new Date(t.time).toLocaleString() : (t.createdAt ? new Date(t.createdAt).toLocaleString() : "")) + "</td>" +
@@ -236,44 +291,12 @@
           "<td>" + fmt(t.stopLoss ?? t.sl, 6) + "</td>" +
           "<td class='" + grossCls + "'>" + (Number.isFinite(gross) ? gross.toFixed(4) : "") + "</td>" +
           "<td class='" + netCls + "'>" + (Number.isFinite(net) ? net.toFixed(4) : "") + "</td>" +
-          "<td>" + actionsHtml + "</td>";
+          "<td></td>";
+
+        tr.children[10].appendChild(actionWrap);
 
         body.appendChild(tr);
       }
-
-      body.querySelectorAll("button.cancelBtn").forEach(btn => {
-        btn.addEventListener("click", async () => {
-          const txid = String(btn.getAttribute("data-txid") || "");
-          if (!txid) return;
-          if (!confirm("Cancel order " + txid + " ?")) return;
-
-          btn.disabled = true;
-          try {
-            await postJson(apiUrl("/api/order/cancel"), { txid });
-            await refreshTrades();
-          } catch (e) {
-            alert(String(e.message || e));
-            btn.disabled = false;
-          }
-        });
-      });
-
-      body.querySelectorAll("button.closeBtn").forEach(btn => {
-        btn.addEventListener("click", async () => {
-          const tradeId = Number(btn.getAttribute("data-tradeid") || 0);
-          if (!tradeId) return;
-          if (!confirm("Close this position now with market order ?")) return;
-
-          btn.disabled = true;
-          try {
-            await postJson(apiUrl("/api/order/close"), { tradeId });
-            await refreshTrades();
-          } catch (e) {
-            alert(String(e.message || e));
-            btn.disabled = false;
-          }
-        });
-      });
 
       const total = Number(data.total || 0);
       const totalPages = Math.max(1, Math.ceil(total / LIMIT));

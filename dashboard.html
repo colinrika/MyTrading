@@ -4,7 +4,6 @@
 <head>
   <meta charset="UTF-8" />
   <title>🚀 Namu Trading</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -166,13 +165,8 @@
     }
 
     @keyframes pulse {
-      from {
-        box-shadow: 0 0 6px rgba(0, 255, 0, 0.1);
-      }
-
-      to {
-        box-shadow: 0 0 14px rgba(0, 255, 0, 0.5);
-      }
+      from { box-shadow: 0 0 6px rgba(0, 255, 0, 0.1); }
+      to { box-shadow: 0 0 14px rgba(0, 255, 0, 0.5); }
     }
 
     footer {
@@ -180,118 +174,14 @@
       color: #8b949e;
     }
 
-    .modal {
-      display: none;
-      position: fixed;
-      z-index: 10;
-      left: 0;
-      top: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0, 0, 0, 0.6);
-      overflow-y: auto;
-    }
-
-    .modal-content {
-      background: #161b22;
-      margin: 3% auto;
-      padding: 18px;
-      border: 2px solid #30363d;
-      border-radius: 10px;
-      width: 92%;
-      max-width: 1100px;
-      color: #e6edf3;
-      text-align: left;
-      max-height: 92vh;
-      overflow-y: auto;
-    }
-
-    .close {
-      float: right;
-      color: #aaa;
-      font-size: 22px;
-      cursor: pointer;
-    }
-
-    .close:hover {
-      color: #fff;
-    }
-
-    canvas {
-      width: 100%;
-      height: 460px !important;
-      margin-top: 10px;
-    }
-
-    .profitBox {
-      border: 1px solid #30363d;
-      background-color: #0d1117;
-      border-radius: 10px;
-      padding: 12px;
-      margin-top: 12px;
-    }
-
-    .rowFlex {
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
-
-    .rowFlex>div {
-      flex: 1 1 260px;
-    }
-
-    input,
-    select {
-      border-radius: 6px;
-      border: 1px solid #30363d;
-      background: #0d1117;
-      color: #e6edf3;
-      padding: 6px 8px;
-      width: 100%;
-      box-sizing: border-box;
-    }
-
-    button.primaryBtn {
-      width: 100%;
-      border: none;
-      border-radius: 10px;
-      padding: 14px 16px;
+    a.coinLink {
+      color: #58a6ff;
       font-weight: bold;
-      cursor: pointer;
-      background: #58a6ff;
-      color: #fff;
-      margin-top: 10px;
-      font-size: 16px;
+      text-decoration: none;
     }
 
-    button.primaryBtn:disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
-    }
-
-    .strategyTag {
-      display: inline-block;
-      padding: 4px 10px;
-      border-radius: 999px;
-      border: 1px solid #30363d;
-      background: #0d1117;
-      color: #e6edf3;
-      font-size: 12px;
-      margin-left: 8px;
-      vertical-align: middle;
-    }
-
-    .good {
-      color: lightgreen;
-    }
-
-    .warn {
-      color: #ffcc00;
-    }
-
-    .bad {
-      color: #ff5555;
+    a.coinLink:hover {
+      text-decoration: underline;
     }
   </style>
 </head>
@@ -342,22 +232,10 @@
     <tbody></tbody>
   </table>
 
-  <div id="strategyModal" class="modal">
-    <div class="modal-content">
-      <span class="close" id="modalCloseBtn">&times;</span>
-      <h3 id="modalTitle"></h3>
-      <canvas id="projectionChart"></canvas>
-      <div id="modalContent"></div>
-    </div>
-  </div>
-
   <footer>📊 Created by Colin Rika</footer>
 
   <script>
-    const AUTO_TRADING_ALWAYS_ON = false;
-
     const MAX_SCAN_PAIRS = 60;
-
     const RSI_PERIOD = 14;
 
     const H1_INTERVAL_MIN = 60;
@@ -374,15 +252,14 @@
     const safeListEl = document.getElementById("safeTradesList");
     const tableBodyEl = document.querySelector("#results tbody");
 
-    const modalEl = document.getElementById("strategyModal");
-    const modalTitleEl = document.getElementById("modalTitle");
-    const modalContentEl = document.getElementById("modalContent");
-    const modalCloseBtnEl = document.getElementById("modalCloseBtn");
-    const projectionCanvasEl = document.getElementById("projectionChart");
-
     let SIMULATOR = false;
-
     let AGGRESSIVE_MODE = String(localStorage.getItem("AGGRESSIVE_MODE") || "false").toLowerCase() === "true";
+
+    let intervalIds = [];
+    let loggedOut = false;
+    let redirecting = false;
+
+    function apiUrl(p) { return window.location.origin + p; }
 
     function setAggressiveUi() {
       const cb = document.getElementById("aggressiveToggle");
@@ -390,12 +267,6 @@
       if (cb) cb.checked = AGGRESSIVE_MODE;
       if (badge) badge.textContent = AGGRESSIVE_MODE ? "On" : "Off";
     }
-
-    let intervalIds = [];
-    let loggedOut = false;
-    let redirecting = false;
-
-    function apiUrl(p) { return window.location.origin + p; }
 
     function startIntervals() {
       intervalIds.push(setInterval(refreshMode, 30000));
@@ -539,392 +410,6 @@
       }
     }
 
-    function prettyPair(pair) { return String(pair).replace("X", "").replace("ZUSD", "/USD"); }
-
-    function blockPair(pair) {
-      blockedPairs.add(pair);
-      localStorage.setItem("blockedPairs", JSON.stringify(Array.from(blockedPairs)));
-    }
-
-    function num(v) {
-      const n = Number(v);
-      return Number.isFinite(n) ? n : 0;
-    }
-
-    async function getPairInfo(pair) {
-      try {
-        return await getJson(apiUrl("/pair-info?pair=" + encodeURIComponent(pair)));
-      } catch {
-        return { ordermin: null, costmin: null };
-      }
-    }
-
-    function calcMinUsd(pairInfo, price) {
-      const ordermin = num(pairInfo?.ordermin);
-      const costmin = num(pairInfo?.costmin);
-      const byVol = (ordermin > 0) ? (ordermin * price) : 0;
-      const byCost = (costmin > 0) ? costmin : 0;
-      const minUsd = Math.max(byVol, byCost);
-      return (minUsd > 0) ? minUsd : 0;
-    }
-
-    function linearRegression(y, x) {
-      const n = y.length;
-      const sumx = x.reduce((a, b) => a + b, 0);
-      const sumy = y.reduce((a, b) => a + b, 0);
-      const sumxy = y.reduce((a, b, i) => a + b * x[i], 0);
-      const sumxx = x.reduce((a, b) => a + b * b, 0);
-      const denom = (n * sumxx - sumx * sumx);
-      const m = denom === 0 ? 0 : (n * sumxy - sumx * sumy) / denom;
-      const b = (sumy - m * sumx) / n;
-      return { m, b };
-    }
-
-    function calculateRSI_Wilder(closes, period) {
-      if (!Array.isArray(closes) || closes.length < period + 1) return 50;
-
-      let gains = 0;
-      let losses = 0;
-
-      for (let i = 1; i <= period; i++) {
-        const delta = closes[i] - closes[i - 1];
-        if (delta >= 0) gains += delta;
-        else losses -= delta;
-      }
-
-      let avgGain = gains / period;
-      let avgLoss = losses / period;
-
-      for (let i = period + 1; i < closes.length; i++) {
-        const delta = closes[i] - closes[i - 1];
-        const gain = delta > 0 ? delta : 0;
-        const loss = delta < 0 ? -delta : 0;
-        avgGain = (avgGain * (period - 1) + gain) / period;
-        avgLoss = (avgLoss * (period - 1) + loss) / period;
-      }
-
-      if (avgLoss === 0) return 100;
-      const rs = avgGain / avgLoss;
-      return 100 - (100 / (1 + rs));
-    }
-
-    function buildScore(predChange, trendSlope, rsi) {
-      const bonusMidRsi = (rsi >= 50 && rsi <= 65) ? 5 : 0;
-      const penaltyOverbought = (rsi > 70) ? 10 : 0;
-      return (predChange * 2) + (trendSlope * 10) + bonusMidRsi - penaltyOverbought;
-    }
-
-    function ema(values, period) {
-      if (!Array.isArray(values) || values.length < period) return null;
-      const k = 2 / (period + 1);
-
-      let e = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
-      for (let i = period; i < values.length; i++) {
-        e = values[i] * k + e * (1 - k);
-      }
-      return e;
-    }
-
-    function emaSeries(values, period) {
-      if (!Array.isArray(values) || values.length === 0) return [];
-      const out = new Array(values.length).fill(null);
-      if (values.length < period) return out;
-
-      const k = 2 / (period + 1);
-
-      let sum = 0;
-      for (let i = 0; i < period; i++) sum += values[i];
-      let e = sum / period;
-
-      out[period - 1] = e;
-
-      for (let i = period; i < values.length; i++) {
-        e = values[i] * k + e * (1 - k);
-        out[i] = e;
-      }
-
-      return out;
-    }
-
-    function vwapFromCandles(candles) {
-      if (!Array.isArray(candles) || !candles.length) return null;
-
-      let pv = 0;
-      let vol = 0;
-
-      for (const c of candles) {
-        const high = Number(c.high);
-        const low = Number(c.low);
-        const close = Number(c.close);
-        const volume = Number(c.volume);
-
-        const tp = (high + low + close) / 3;
-        pv += tp * volume;
-        vol += volume;
-      }
-
-      if (vol <= 0) return null;
-      return pv / vol;
-    }
-
-    function approxPullbackSwingLow(closes, lookbackBars) {
-      const n = Math.max(3, Number(lookbackBars || 10));
-      if (!Array.isArray(closes) || closes.length < n) return null;
-      let m = Infinity;
-      for (let i = closes.length - n; i < closes.length; i++) {
-        m = Math.min(m, closes[i]);
-      }
-      return Number.isFinite(m) ? m : null;
-    }
-
-    function approxPullbackSwingHigh(closes, lookbackBars) {
-      const n = Math.max(3, Number(lookbackBars || 10));
-      if (!Array.isArray(closes) || closes.length < n) return null;
-      let m = -Infinity;
-      for (let i = closes.length - n; i < closes.length; i++) {
-        m = Math.max(m, closes[i]);
-      }
-      return Number.isFinite(m) ? m : null;
-    }
-
-    function decideStrategyOrder(res, currentPrice, aggressive) {
-      const h1 = res.h1 || [];
-      const h4 = res.h4 || [];
-      const m5 = res.m5 || [];
-
-      const h1Closes = h1.map(x => x.close);
-      const h4Closes = h4.map(x => x.close);
-      const m5Closes = m5.map(x => x.close);
-
-      if (h1Closes.length < 220 || h4Closes.length < 220 || m5Closes.length < 60) {
-        return {
-          tag: "Not enough data",
-          actionTitle: "No trade right now",
-          details: "Not enough candles to calculate EMA 200 trend and 5 minute pullback rules.",
-          side: null,
-          orderType: null,
-          price: null,
-          quality: 0,
-          explain: "Need more candles",
-          next: "Wait for more market data to load."
-        };
-      }
-
-      const ema200H1 = ema(h1Closes, 200);
-      const ema200H4 = ema(h4Closes, 200);
-
-      const lastH1 = h1Closes[h1Closes.length - 1];
-      const lastH4 = h4Closes[h4Closes.length - 1];
-
-      const upBias = lastH1 > ema200H1 && lastH4 > ema200H4;
-      const downBias = lastH1 < ema200H1 && lastH4 < ema200H4;
-
-      const m5Ema20Series = emaSeries(m5Closes, 20);
-      const m5Vwap = vwapFromCandles(m5);
-
-      const explainBase =
-        "Higher timeframe trend uses EMA 200 on 1 hour and 4 hour. " +
-        "Entry uses 5 minute pullback to EMA 20 or VWAP, then a reclaim candle. " +
-        "Stop goes beyond the pullback swing point, so the trade is invalidated cleanly.";
-
-      if (!upBias && !downBias) {
-        return {
-          tag: "Chop zone",
-          actionTitle: "No trade right now",
-          details:
-            "Price is too close to EMA 200 on 1 hour or 4 hour, so direction is unclear. " +
-            "This is where fake moves happen. " + explainBase,
-          side: null,
-          orderType: null,
-          price: null,
-          quality: 0,
-          explain: explainBase,
-          next: "Wait until both 1 hour and 4 hour are clearly above or below EMA 200."
-        };
-      }
-
-      function isReclaimLongAt(i) {
-        const emaNow = m5Ema20Series[i];
-        const emaPrev = m5Ema20Series[i - 1];
-        if (!Number.isFinite(emaNow) || !Number.isFinite(emaPrev) || !Number.isFinite(m5Vwap)) return false;
-
-        const cNow = m5Closes[i];
-        const cPrev = m5Closes[i - 1];
-
-        const prevBelow = (cPrev <= emaPrev) || (cPrev <= m5Vwap);
-        const nowAbove = (cNow > emaNow) && (cNow > m5Vwap);
-        return prevBelow && nowAbove;
-      }
-
-      function isReclaimShortAt(i) {
-        const emaNow = m5Ema20Series[i];
-        const emaPrev = m5Ema20Series[i - 1];
-        if (!Number.isFinite(emaNow) || !Number.isFinite(emaPrev) || !Number.isFinite(m5Vwap)) return false;
-
-        const cNow = m5Closes[i];
-        const cPrev = m5Closes[i - 1];
-
-        const prevAbove = (cPrev >= emaPrev) || (cPrev >= m5Vwap);
-        const nowBelow = (cNow < emaNow) && (cNow < m5Vwap);
-        return prevAbove && nowBelow;
-      }
-
-      let reclaimBarsAgo = null;
-      const lastIdx = m5Closes.length - 1;
-
-      for (let i = lastIdx; i >= Math.max(1, lastIdx - 2); i--) {
-        if (upBias && isReclaimLongAt(i)) { reclaimBarsAgo = lastIdx - i; break; }
-        if (downBias && isReclaimShortAt(i)) { reclaimBarsAgo = lastIdx - i; break; }
-      }
-
-      const isFreshSetup = reclaimBarsAgo !== null && reclaimBarsAgo <= 2;
-      const reclaimLong = upBias && reclaimBarsAgo !== null;
-      const reclaimShort = downBias && reclaimBarsAgo !== null;
-
-      if (upBias) {
-        if (!reclaimLong) {
-          return {
-            tag: "Waiting for pullback reclaim",
-            actionTitle: "No trade yet",
-            details:
-              "Trend bias is up, but the 5 minute chart has not reclaimed EMA 20 and VWAP after a pullback. " +
-              "Entering early is how you buy the falling knife. " + explainBase,
-            side: null,
-            orderType: null,
-            price: null,
-            quality: 0,
-            explain: explainBase,
-            next: "Wait for a 5 minute close back above EMA 20 and VWAP after price pulled into that area."
-          };
-        }
-
-        if (!isFreshSetup) {
-          return {
-            tag: "Setup too old",
-            actionTitle: "No trade right now",
-            details:
-              "Trend is up, but the reclaim happened too long ago. Your safest list only shows fresh reclaim setups. " +
-              explainBase,
-            side: null,
-            orderType: null,
-            price: null,
-            quality: 0,
-            explain: explainBase,
-            next: "Wait for a new reclaim after a pullback, not a late entry."
-          };
-        }
-
-        const entry = currentPrice;
-        const swingLow = approxPullbackSwingLow(m5Closes, 12);
-        const stop = swingLow ? (swingLow * 0.999) : (entry * 0.992);
-        const r = entry - stop;
-        const tp = entry + (r * (aggressive ? 1.5 : 2.0));
-
-        let q = aggressive ? 75 : 85;
-        if (reclaimBarsAgo === 1) q -= 8;
-        if (reclaimBarsAgo === 2) q -= 15;
-
-        return {
-          tag: "Trend pullback reclaim",
-          actionTitle: "Buy after pullback confirms",
-          details:
-            "Both 1 hour and 4 hour trends are above EMA 200. Price pulled back on 5 minute and reclaimed EMA 20 and VWAP. " +
-            "That is a momentum entry with a clear invalidation point. " + explainBase,
-          side: "buy",
-          orderType: "limit",
-          price: entry,
-          quality: q,
-          explain: explainBase,
-          next:
-            "Stop is placed beyond the pullback swing low. Take profit is based on your risk distance, not a random percent.",
-          stopLoss: stop,
-          takeProfit: tp,
-          fresh: true,
-          freshBarsAgo: reclaimBarsAgo
-        };
-      }
-
-      if (downBias) {
-        if (!reclaimShort) {
-          return {
-            tag: "Waiting for pullback reclaim",
-            actionTitle: "No trade yet",
-            details:
-              "Trend bias is down, but the 5 minute chart has not reclaimed EMA 20 and VWAP downward after a pullback. " +
-              "Chasing without confirmation is how shorts get trapped. " + explainBase,
-            side: null,
-            orderType: null,
-            price: null,
-            quality: 0,
-            explain: explainBase,
-            next: "Wait for a 5 minute close back below EMA 20 and VWAP after price bounced into that area."
-          };
-        }
-
-        if (!isFreshSetup) {
-          return {
-            tag: "Setup too old",
-            actionTitle: "No trade right now",
-            details:
-              "Trend is down, but the reclaim happened too long ago. Your safest list only shows fresh reclaim setups. " +
-              explainBase,
-            side: null,
-            orderType: null,
-            price: null,
-            quality: 0,
-            explain: explainBase,
-            next: "Wait for a new reclaim after a pullback, not a late entry."
-          };
-        }
-
-        const entry = currentPrice;
-        const swingHigh = approxPullbackSwingHigh(m5Closes, 12);
-        const stop = swingHigh ? (swingHigh * 1.001) : (entry * 1.008);
-        const r = stop - entry;
-        const tp = entry - (r * (aggressive ? 1.5 : 2.0));
-
-        let q = aggressive ? 70 : 82;
-        if (reclaimBarsAgo === 1) q -= 8;
-        if (reclaimBarsAgo === 2) q -= 15;
-
-        return {
-          tag: "Trend pullback reclaim",
-          actionTitle: "Sell after pullback confirms",
-          details:
-            "Both 1 hour and 4 hour trends are below EMA 200. Price pulled back on 5 minute and reclaimed EMA 20 and VWAP downward. " +
-            "That is a continuation entry with defined risk. " + explainBase,
-          side: "sell",
-          orderType: "limit",
-          price: entry,
-          quality: q,
-          explain: explainBase,
-          next:
-            "Stop is placed beyond the pullback swing high. Take profit is based on your risk distance, not a random percent.",
-          stopLoss: stop,
-          takeProfit: tp,
-          fresh: true,
-          freshBarsAgo: reclaimBarsAgo
-        };
-      }
-
-      return {
-        tag: "No setup",
-        actionTitle: "No trade right now",
-        details: "No clean trend plus pullback reclaim setup right now. " + explainBase,
-        side: null,
-        orderType: null,
-        price: null,
-        quality: 0,
-        explain: explainBase,
-        next: "Wait for clearer trend alignment and a reclaim candle."
-      };
-    }
-
-    function openModal() { modalEl.style.display = "block"; }
-    function closeModal() { modalEl.style.display = "none"; }
-    modalCloseBtnEl.addEventListener("click", closeModal);
-    window.addEventListener("click", (e) => { if (e.target === modalEl) closeModal(); });
-
     async function refreshUsdQuick() {
       if (loggedOut) return;
       try {
@@ -937,6 +422,17 @@
       } catch {
         document.getElementById("usdQuick").textContent = "ZUSD unavailable";
       }
+    }
+
+    function prettyPair(pair) { return String(pair).replace("X", "").replace("ZUSD", "/USD"); }
+
+    function openStrategyPage(pair) {
+      const url = "/strategy.html?pair=" + encodeURIComponent(pair);
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+
+    function strategyHref(pair) {
+      return "/strategy.html?pair=" + encodeURIComponent(pair);
     }
 
     async function getAllUsdPairs() {
@@ -1004,343 +500,50 @@
       }));
     }
 
-    function buildModalChart(res) {
-      const src = (res.chartData && res.chartData.length) ? res.chartData : res.data;
-      const prices = src.map(d => d.close);
-      const times = src.map(d => d.time);
-
-      const x = prices.map((_, i) => i + 1);
-      const lrP = linearRegression(prices, x);
-      const forecast = Array.from({ length: 5 }, (_, i) => lrP.m * (x.length + i + 1) + lrP.b);
-
-      const rsiHist = [];
-      for (let i = 0; i < prices.length; i++) rsiHist.push(calculateRSI_Wilder(prices.slice(0, i + 1), RSI_PERIOD));
-
-      const rsiX = rsiHist.map((_, i) => i + 1);
-      const lrR = linearRegression(rsiHist, rsiX);
-      const rsiForecast = Array.from({ length: 5 }, (_, i) => lrR.m * (rsiHist.length + i + 1) + lrR.b);
-
-      const entry = res.last;
-      const tp = entry * 1.05;
-      const sl = entry * 0.93;
-
-      const labels = times.concat(["+1h", "+2h", "+3h", "+4h", "+5h"]);
-      const forecastSeries = Array(prices.length).fill(null).concat(forecast);
-      const rsiHistSeries = rsiHist.concat(Array(5).fill(null));
-      const rsiForecastSeries = Array(prices.length).fill(null).concat(rsiForecast);
-
-      if (window.projChart) window.projChart.destroy();
-
-      window.projChart = new Chart(projectionCanvasEl, {
-        type: "line",
-        data: {
-          labels,
-          datasets: [
-            { label: "Price", data: prices.concat(Array(5).fill(null)), borderColor: "#4da3ff", borderWidth: 4, tension: 0.35, pointRadius: 0, yAxisID: "y" },
-            { label: "Forecast", data: forecastSeries, borderColor: "rgba(77,163,255,0.70)", borderWidth: 3, borderDash: [8, 7], tension: 0.35, pointRadius: 0, yAxisID: "y" },
-
-            { label: "RSI", data: rsiHistSeries, borderColor: "#b36bff", borderWidth: 4, tension: 0.25, pointRadius: 0, yAxisID: "y1" },
-            { label: "RSI Forecast", data: rsiForecastSeries, borderColor: "rgba(179,107,255,0.55)", borderWidth: 3, borderDash: [6, 8], tension: 0.25, pointRadius: 0, yAxisID: "y1" },
-
-            { label: "Take Profit", data: Array(labels.length).fill(tp), borderColor: "rgba(0,255,0,0.85)", borderWidth: 3, borderDash: [12, 9], pointRadius: 0, yAxisID: "y" },
-            { label: "Stop Loss", data: Array(labels.length).fill(sl), borderColor: "rgba(255,80,80,0.75)", borderWidth: 3, borderDash: [12, 9], pointRadius: 0, yAxisID: "y" }
-          ]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          devicePixelRatio: 2,
-          interaction: { mode: "index", intersect: false },
-          plugins: {
-            legend: {
-              position: "bottom",
-              labels: {
-                color: "#ffffff",
-                padding: 18,
-                boxWidth: 18,
-                font: { size: 16, weight: "bold" },
-                usePointStyle: true,
-                pointStyle: "line"
-              }
-            },
-            tooltip: {
-              enabled: true,
-              backgroundColor: "rgba(0,0,0,0.92)",
-              titleColor: "#fff",
-              bodyColor: "#fff",
-              borderColor: "rgba(255,255,255,0.18)",
-              borderWidth: 1,
-              titleFont: { size: 15, weight: "bold" },
-              bodyFont: { size: 14 },
-              padding: 12
-            }
-          },
-          scales: {
-            x: {
-              ticks: {
-                color: "#ffffff",
-                font: { size: 14, weight: "bold" },
-                maxRotation: 0,
-                autoSkip: false,
-                callback: function (value, index) {
-                  const step = Math.ceil(labels.length / 7);
-                  return (index % step === 0) ? labels[index] : "";
-                }
-              },
-              grid: { color: "rgba(255,255,255,0.08)" }
-            },
-            y: {
-              title: { display: true, text: "Price", color: "#4da3ff", font: { size: 16, weight: "bold" } },
-              ticks: { color: "#4da3ff", font: { size: 13, weight: "bold" }, callback: v => Number(v).toFixed(6) },
-              grid: { color: "rgba(77,163,255,0.10)" }
-            },
-            y1: {
-              position: "right",
-              min: 20,
-              max: 80,
-              title: { display: true, text: "RSI", color: "#b36bff", font: { size: 16, weight: "bold" } },
-              ticks: { color: "#b36bff", stepSize: 10, font: { size: 13, weight: "bold" } },
-              grid: { drawOnChartArea: false }
-            }
-          }
-        }
-      });
-
-      return { entry, tp, sl };
+    function linearRegression(y, x) {
+      const n = y.length;
+      const sumx = x.reduce((a, b) => a + b, 0);
+      const sumy = y.reduce((a, b) => a + b, 0);
+      const sumxy = y.reduce((a, b, i) => a + b * x[i], 0);
+      const sumxx = x.reduce((a, b) => a + b * b, 0);
+      const denom = (n * sumxx - sumx * sumx);
+      const m = denom === 0 ? 0 : (n * sumxy - sumx * sumy) / denom;
+      const b = (sumy - m * sumx) / n;
+      return { m, b };
     }
 
-    async function computeEstimates(entryPrice, tp, sl) {
-      const d = await getJson(apiUrl("/balance"));
-      const totalZusd = Number(d.balance?.ZUSD || 0);
-      const available = Number(d.tradeBalance?.available ?? totalZusd);
+    function calculateRSI_Wilder(closes, period) {
+      if (!Array.isArray(closes) || closes.length < period + 1) return 50;
 
-      const amtEl = document.getElementById("tradeAmount");
-      const pctEl = document.getElementById("investSelect");
+      let gains = 0;
+      let losses = 0;
 
-      const amt = Number(amtEl.value || 0);
-      const pct = Number(pctEl.value || 0);
+      for (let i = 1; i <= period; i++) {
+        const delta = closes[i] - closes[i - 1];
+        if (delta >= 0) gains += delta;
+        else losses -= delta;
+      }
 
-      const invest = (amt > 0) ? amt : (available * (pct / 100));
-      const qty = invest > 0 ? (invest / entryPrice) : 0;
+      let avgGain = gains / period;
+      let avgLoss = losses / period;
 
-      const estProfit = (tp - entryPrice) * qty;
-      const estLoss = (entryPrice - sl) * qty;
+      for (let i = period + 1; i < closes.length; i++) {
+        const delta = closes[i] - closes[i - 1];
+        const gain = delta > 0 ? delta : 0;
+        const loss = delta < 0 ? -delta : 0;
+        avgGain = (avgGain * (period - 1) + gain) / period;
+        avgLoss = (avgLoss * (period - 1) + loss) / period;
+      }
 
-      return { totalZusd, available, invest, qty, estProfit, estLoss };
+      if (avgLoss === 0) return 100;
+      const rs = avgGain / avgLoss;
+      return 100 - (100 / (1 + rs));
     }
 
-    async function placeOrder(pair, side, price, opts, isAuto) {
-      const tp = Number(document.getElementById("tpInput")?.value || 0);
-      const sl = Number(document.getElementById("slInput")?.value || 0);
-
-      const d = await getJson(apiUrl("/balance"));
-      const totalZusd = Number(d.balance?.ZUSD || 0);
-      const available = Number(d.tradeBalance?.available ?? totalZusd);
-
-      const amt = Number(document.getElementById("tradeAmount")?.value || 0);
-      const pct = Number(document.getElementById("investSelect")?.value || 0);
-      const invest = (amt > 0) ? amt : (available * (pct / 100));
-
-      const payload = {
-        pair,
-        side,
-        orderType: opts.orderType || "limit",
-        price,
-        price2: (opts.price2 === undefined ? null : opts.price2),
-        takeProfit: tp,
-        stopLoss: sl,
-        investUsd: invest,
-        isAuto: isAuto === true
-      };
-
-      try {
-        return await postJson(apiUrl("/trade"), payload);
-      } catch (e) {
-        const msg = String(e.message || "");
-        if (msg.includes("Invalid permissions") || msg.includes("trading restricted")) blockPair(pair);
-        throw e;
-      }
-    }
-
-    async function showStrategyModal(res) {
-      const chartBuilt = buildModalChart(res);
-      const rec = decideStrategyOrder(res, chartBuilt.entry, AGGRESSIVE_MODE);
-
-      modalTitleEl.textContent = prettyPair(res.pair) + " " + res.signal;
-
-      const recLine = rec
-        ? ("<span class='good' style='font-weight:bold; font-size:18px;'>" + rec.actionTitle + "</span><span class='strategyTag'>" + rec.tag + "</span>")
-        : ("<span class='warn' style='font-weight:bold; font-size:18px;'>No trade right now</span>");
-
-      const recDetails = rec
-        ? ("<div class='muted' style='margin-top:6px;'>" + rec.details + "</div>")
-        : ("<div class='muted' style='margin-top:6px;'>Your rules do not see a safe entry. No trade is a valid outcome.</div>");
-
-      const nextLine = rec && rec.next
-        ? ("<div class='profitBox' style='margin-top:12px;'><div class='muted'>What to watch next</div><div style='margin-top:6px; font-weight:bold;'>" + rec.next + "</div></div>")
-        : "";
-
-      modalContentEl.innerHTML =
-        "<div class='profitBox'>" +
-        "<div class='rowFlex'>" +
-        "<div>" +
-        "<div class='muted'>Current price</div><div class='good' style='font-size:18px; font-weight:bold;'>" + chartBuilt.entry.toFixed(6) + "</div>" +
-        "<div class='muted' style='margin-top:8px;'>RSI</div><div class='warn' style='font-size:16px; font-weight:bold;'>" + Number(res.rsi).toFixed(1) + "</div>" +
-        "<div class='muted' style='margin-top:8px;'>Forecast change</div><div class='warn' style='font-size:16px; font-weight:bold;'>" + Number(res.predChange).toFixed(2) + " percent</div>" +
-        "</div>" +
-        "<div>" +
-        "<div class='muted'>Decision</div>" +
-        "<div style='margin-top:2px;'>" + recLine + "</div>" +
-        recDetails +
-        nextLine +
-        "</div>" +
-        "</div>" +
-        "</div>" +
-        "</div>" +
-
-        "<div class='profitBox'>" +
-        "<div class='rowFlex'>" +
-        "<div>" +
-        "<div class='muted'>Take profit</div><input id='tpInput' type='number' value='" + chartBuilt.tp.toFixed(6) + "'>" +
-        "<div class='muted' style='margin-top:10px;'>Stop loss</div><input id='slInput' type='number' value='" + chartBuilt.sl.toFixed(6) + "'>" +
-        "<div class='muted' style='margin-top:10px;'>Trade amount USD</div><input id='tradeAmount' type='number' value='5'>" +
-        "<div class='muted' style='margin-top:10px;'>Or percent of available ZUSD</div>" +
-        "<select id='investSelect'>" +
-        "<option value='10'>10</option>" +
-        "<option value='25'>25</option>" +
-        "<option value='50'>50</option>" +
-        "<option value='100'>100</option>" +
-        "</select>" +
-        "</div>" +
-
-        "<div>" +
-        "<div class='muted'>Strategy order preview</div>" +
-        "<div id='orderPreviewBox' class='profitBox'></div>" +
-        "<div class='muted' style='margin-top:10px;'>Available funds and estimate</div>" +
-        "<div id='estimateBox' class='profitBox'></div>" +
-        "<button id='btnApprove' class='primaryBtn' " + (rec ? "" : "disabled") + ">✅ Approve Strategy</button>" +
-        "<div class='muted' style='margin-top:8px;'>If Kraken says insufficient funds, you probably do not have enough available ZUSD for this pair.</div>" +
-        "</div>" +
-        "</div>" +
-        "</div>";
-
-      openModal();
-
-      const estimateBox = document.getElementById("estimateBox");
-      const orderPreviewBox = document.getElementById("orderPreviewBox");
-      const approveBtn = document.getElementById("btnApprove");
-      const pairInfo = await getPairInfo(res.pair);
-
-      async function refreshEst() {
-        try {
-          const entryPrice = chartBuilt.entry;
-          const tp = Number(document.getElementById("tpInput").value);
-          const sl = Number(document.getElementById("slInput").value);
-
-          const est = await computeEstimates(entryPrice, tp, sl);
-
-          if (orderPreviewBox) {
-            const amt = Number(document.getElementById("tradeAmount").value || 0);
-            const pct = Number(document.getElementById("investSelect").value || 0);
-
-            const modeTxt = (amt > 0) ? "Fixed USD" : ("Percent of available ZUSD " + pct.toFixed(0) + " percent");
-
-            const sideTxt = rec ? String(rec.side).toUpperCase() : "N A";
-            const typeTxt = rec ? String(rec.orderType) : "N A";
-            const priceTxt = rec ? Number(rec.price).toFixed(6) : "0";
-            const price2Txt = (rec && rec.price2 !== undefined && rec.price2 !== null) ? Number(rec.price2).toFixed(6) : "";
-
-            const freshTxt = (rec && rec.fresh === true)
-              ? ("Fresh reclaim " + String(rec.freshBarsAgo) + " bars ago")
-              : "Not fresh";
-
-            orderPreviewBox.innerHTML =
-              "<div class='muted'>Mode</div><div style='font-weight:bold;'>" + modeTxt + "</div>" +
-              "<div class='muted' style='margin-top:8px;'>Side and type</div><div style='font-weight:bold;'>" + sideTxt + " " + typeTxt + "</div>" +
-              "<div class='muted' style='margin-top:8px;'>Freshness</div><div class='muted' style='font-weight:bold;'>" + freshTxt + "</div>" +
-              "<div class='muted' style='margin-top:8px;'>Buy amount</div><div class='warn' style='font-weight:bold; font-size:16px;'>" + est.invest.toFixed(2) + " USD</div>" +
-              "<div class='muted' style='margin-top:8px;'>Estimated quantity</div><div class='muted' style='font-weight:bold;'>" + est.qty.toFixed(6) + "</div>" +
-              "<div class='muted' style='margin-top:8px;'>Entry trigger</div><div class='good' style='font-weight:bold;'>" + priceTxt + "</div>" +
-              (price2Txt ? "<div class='muted' style='margin-top:8px;'>Entry limit</div><div class='good' style='font-weight:bold;'>" + price2Txt + "</div>" : "");
-          }
-
-          const minUsd = calcMinUsd(pairInfo, entryPrice);
-          const tooSmall = (minUsd > 0 && est.invest > 0 && est.invest < minUsd);
-          const overAvail = (est.invest > est.available);
-
-          estimateBox.innerHTML =
-            "<div class='muted'>Available ZUSD</div><div class='good' style='font-weight:bold; font-size:16px;'>" + est.available.toFixed(4) + "</div>" +
-            "<div class='muted' style='margin-top:6px;'>Total ZUSD</div><div class='muted' style='font-weight:bold; font-size:14px;'>" + est.totalZusd.toFixed(4) + "</div>" +
-            "<div class='muted' style='margin-top:8px;'>Buy amount</div><div class='" + (overAvail ? "bad" : (tooSmall ? "bad" : "warn")) + "' style='font-weight:bold; font-size:16px;'>" + est.invest.toFixed(2) + "</div>" +
-            (minUsd > 0
-              ? "<div class='muted' style='margin-top:8px;'>Minimum for this pair</div><div class='" + (tooSmall ? "bad" : "muted") + "' style='font-weight:bold; font-size:14px;'>" + minUsd.toFixed(2) + " USD</div>"
-              : "") +
-            "<div class='muted' style='margin-top:8px;'>Estimated profit at TP</div><div class='good' style='font-weight:bold; font-size:16px;'>" + est.estProfit.toFixed(4) + " USD</div>" +
-            "<div class='muted' style='margin-top:8px;'>Estimated loss at SL</div><div class='bad' style='font-weight:bold; font-size:16px;'>" + est.estLoss.toFixed(4) + " USD</div>" +
-            "<div class='muted' style='margin-top:6px;'>Estimates ignore fees and slippage.</div>" +
-            (tooSmall ? "<div class='bad' style='margin-top:10px; font-weight:bold;'>Buy amount is below minimum. Increase to at least " + minUsd.toFixed(2) + " USD.</div>" : "") +
-            (overAvail ? "<div class='bad' style='margin-top:10px; font-weight:bold;'>Buy amount is above available ZUSD. If your funds are in another asset, convert to USD or use a matching pair.</div>" : "");
-
-          if (approveBtn) {
-            approveBtn.disabled = (!rec) || tooSmall || (est.invest <= 0) || overAvail;
-          }
-        } catch {
-          estimateBox.innerHTML = "<div class='bad'>Unable to load estimate</div>";
-          if (approveBtn) approveBtn.disabled = true;
-        }
-      }
-
-      document.getElementById("tpInput").addEventListener("input", refreshEst);
-      document.getElementById("slInput").addEventListener("input", refreshEst);
-      document.getElementById("tradeAmount").addEventListener("input", refreshEst);
-      document.getElementById("investSelect").addEventListener("change", refreshEst);
-
-      await refreshEst();
-
-      if (approveBtn) {
-        approveBtn.addEventListener("click", async () => {
-          if (!rec) return;
-
-          approveBtn.disabled = true;
-          approveBtn.textContent = "Sending order...";
-
-          try {
-            const d = await getJson(apiUrl("/balance"));
-            const totalZusd = Number(d.balance?.ZUSD || 0);
-            const available = Number(d.tradeBalance?.available ?? totalZusd);
-
-            const amt = Number(document.getElementById("tradeAmount").value || 0);
-            const pct = Number(document.getElementById("investSelect").value || 0);
-            const invest = (amt > 0) ? amt : (available * (pct / 100));
-
-            const minUsd = calcMinUsd(pairInfo, chartBuilt.entry);
-            if (minUsd > 0 && invest < minUsd) {
-              alert("Minimum for this pair is " + minUsd.toFixed(2) + " USD. Increase buy amount.");
-              approveBtn.disabled = false;
-              approveBtn.textContent = "✅ Approve Strategy";
-              return;
-            }
-
-            if (invest > available) {
-              alert("Not enough available ZUSD. Available " + available.toFixed(4) + " Invest " + invest.toFixed(2));
-              approveBtn.disabled = false;
-              approveBtn.textContent = "✅ Approve Strategy";
-              return;
-            }
-
-            const result = await placeOrder(res.pair, rec.side, rec.price, { orderType: rec.orderType, price2: rec.price2 }, false);
-            alert(String(result?.message || "Order sent"));
-            await refreshUsdQuick();
-            closeModal();
-          } catch (e) {
-            const p = e.payload || {};
-            if (p && p.hint) alert(String(p.hint));
-            else alert(String(e.message || "Order failed"));
-            approveBtn.disabled = false;
-            approveBtn.textContent = "✅ Approve Strategy";
-          }
-        });
-      }
+    function buildScore(predChange, trendSlope, rsi) {
+      const bonusMidRsi = (rsi >= 50 && rsi <= 65) ? 5 : 0;
+      const penaltyOverbought = (rsi > 70) ? 10 : 0;
+      return (predChange * 2) + (trendSlope * 10) + bonusMidRsi - penaltyOverbought;
     }
 
     async function analyze() {
@@ -1381,26 +584,14 @@
           const forecast = Array.from({ length: 5 }, (_, i) => lr.m * (x.length + i + 1) + lr.b);
           const predChange = ((forecast[forecast.length - 1] - closes[closes.length - 1]) / closes[closes.length - 1]) * 100;
 
-          const rowObj = {
+          results.push({
             pair: p,
-            chartData: h1,
-            data: h1.slice(-10),
             last: closes[closes.length - 1],
             rsi,
             predChange,
             score: buildScore(predChange, lr.m, rsi),
-            signal: (rsi > 60 && predChange > 3) ? "🚀 Strong Buy" : "⏸ Neutral",
-            slope: lr.m,
-            prices: closes,
-            rsiHist: closes.map((_, i) => calculateRSI_Wilder(closes.slice(0, i + 1), RSI_PERIOD)),
-            h1,
-            h4,
-            m5
-          };
-
-          rowObj.recommended = decideStrategyOrder(rowObj, rowObj.last, AGGRESSIVE_MODE);
-
-          results.push(rowObj);
+            signal: (rsi > 60 && predChange > 3) ? "🚀 Strong Buy" : "⏸ Neutral"
+          });
         } catch (e) {
           console.error("Analyze failed for pair", p, e);
         }
@@ -1417,31 +608,35 @@
         const row = document.createElement("tr");
         if (r.predChange > 8) row.classList.add("highlightRow");
 
+        const pairText = prettyPair(r.pair);
+        const href = strategyHref(r.pair);
+
         row.innerHTML =
-          "<td>" + prettyPair(r.pair) + "</td>" +
+          "<td>" +
+            "<a class='coinLink' href='" + href + "' target='_blank' rel='noopener noreferrer'>" + pairText + "</a>" +
+          "</td>" +
           "<td>" + r.last.toFixed(6) + "</td>" +
           "<td style='color:" + (r.predChange > 0 ? "lightgreen" : "red") + ";'>" + r.predChange.toFixed(2) + "%</td>" +
           "<td>" + r.rsi.toFixed(1) + "</td>" +
           "<td>" + r.score.toFixed(2) + "</td>" +
           "<td class='" + (r.signal.includes("Strong") ? "strongBuy" : "neutral") + "'>" + r.signal + "</td>";
 
-        row.addEventListener("click", () => showStrategyModal(r));
+        row.addEventListener("click", (ev) => {
+          const tag = String(ev.target && ev.target.tagName || "");
+          if (tag.toLowerCase() === "a") return;
+          openStrategyPage(r.pair);
+        });
+
         tableBodyEl.appendChild(row);
       }
 
-      const safeTrades = results
-        .filter(r => {
-          const rec = r.recommended;
-          if (!rec) return false;
-          if ((rec.quality || 0) < 80) return false;
-          if (rec.side !== "buy" && rec.side !== "sell") return false;
-          if (rec.fresh !== true) return false;
-          return true;
-        })
-        .sort((a, b) => (b.recommended.quality || 0) - (a.recommended.quality || 0))
-        .slice(0, 3);
-
-      try { await postJson(apiUrl("/api/alerts/safest"), { safeTrades }); } catch { }
+      let safeTrades = [];
+      try {
+        const safest = await getJson(apiUrl("/api/alerts/safest"));
+        const arr = safest?.safeTrades;
+        if (Array.isArray(arr)) safeTrades = arr;
+      } catch {
+      }
 
       safeListEl.innerHTML = "";
 
@@ -1451,23 +646,27 @@
       }
 
       for (const r of safeTrades) {
+        const pair = r?.pair;
+        const rec = r?.recommended || {};
+        if (!pair) continue;
+
         const item = document.createElement("div");
         item.className = "safeTrade";
 
-        const tag = r.recommended.tag;
-        const action = r.recommended.actionTitle;
-        const barsAgo = (r.recommended && r.recommended.freshBarsAgo !== null && r.recommended.freshBarsAgo !== undefined)
-          ? ("Fresh " + String(r.recommended.freshBarsAgo) + " bars ago")
+        const tag = rec.tag || "";
+        const action = rec.actionTitle || "";
+        const barsAgo = (rec.freshBarsAgo !== null && rec.freshBarsAgo !== undefined)
+          ? ("Fresh " + String(rec.freshBarsAgo) + " bars ago")
           : "Fresh";
 
         item.innerHTML =
-          "<span style='min-width:160px; font-weight:bold;'>" + prettyPair(r.pair) + "</span>" +
+          "<span style='min-width:160px; font-weight:bold;'>" + prettyPair(pair) + "</span>" +
           "<span class='muted' style='flex:1 1 auto;'>" + action + "</span>" +
           "<span class='safeTag'>" + tag + "</span>" +
           "<span class='safeTag'>" + barsAgo + "</span>" +
-          "<span class='safeBadge'>Q " + (r.recommended.quality || 0) + "</span>";
+          "<span class='safeBadge'>Q " + (rec.quality || 0) + "</span>";
 
-        item.addEventListener("click", () => showStrategyModal(r));
+        item.addEventListener("click", () => openStrategyPage(pair));
         safeListEl.appendChild(item);
       }
     }
