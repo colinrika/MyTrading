@@ -643,13 +643,13 @@
       } catch {
       }
 
-      // after safeTrades is built and before/after you render it
+      /**
       try {
         await postJson(apiUrl("/api/alerts/safest"), { safeTrades });
       } catch (e) {
         console.log("Safest trade POST failed", e?.message || e);
       }
-
+      **/
 
       safeListEl.innerHTML = "";
 
