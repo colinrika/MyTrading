@@ -128,19 +128,19 @@ function authRequired(req, res, next) {
   }
 }
 
-function authPageRequired(req, res, next) {
+function pageAuthRequired(req, res, next) {
   try {
     const token = req.cookies?.session || "";
     if (!token) {
-      const nextUrl = req.originalUrl || "/dashboard.html";
-      return res.redirect("/login.html?next=" + encodeURIComponent(nextUrl));
+      const nextUrl = encodeURIComponent(req.originalUrl || "/dashboard.html");
+      return res.redirect("/login.html?next=" + nextUrl);
     }
     const payload = jwt.verify(token, APP_SECRET);
     req.user = payload;
     next();
   } catch {
-    const nextUrl = req.originalUrl || "/dashboard.html";
-    return res.redirect("/login.html?next=" + encodeURIComponent(nextUrl));
+    const nextUrl = encodeURIComponent(req.originalUrl || "/dashboard.html");
+    return res.redirect("/login.html?next=" + nextUrl);
   }
 }
 
@@ -161,14 +161,6 @@ function roundToDecimals(value, decimals) {
   if (n === null) return null;
   const d = Math.max(0, Math.min(12, Number(decimals) || 0));
   return Number(n.toFixed(d));
-}
-
-function floorToDecimals(value, decimals) {
-  const n = numOrNull(value);
-  if (n === null) return null;
-  const d = Math.max(0, Math.min(12, Number(decimals) || 0));
-  const m = Math.pow(10, d);
-  return Math.floor(n * m) / m;
 }
 
 function trimNumberString(s) {
@@ -381,10 +373,10 @@ function buildTelegramMessage(safeTrades) {
 }
 
 /* Protected pages */
-app.get("/dashboard.html", authPageRequired, (req, res) => res.sendFile(path.join(__dirname, "dashboard.html")));
-app.get("/account.html", authPageRequired, (req, res) => res.sendFile(path.join(__dirname, "account.html")));
-app.get("/connect-kraken.html", authPageRequired, (req, res) => res.sendFile(path.join(__dirname, "connect-kraken.html")));
-app.get("/strategy.html", authPageRequired, (req, res) => res.sendFile(path.join(__dirname, "strategy.html")));
+app.get("/dashboard.html", pageAuthRequired, (req, res) => res.sendFile(path.join(__dirname, "dashboard.html")));
+app.get("/account.html", pageAuthRequired, (req, res) => res.sendFile(path.join(__dirname, "account.html")));
+app.get("/connect-kraken.html", pageAuthRequired, (req, res) => res.sendFile(path.join(__dirname, "connect-kraken.html")));
+app.get("/strategy.html", pageAuthRequired, (req, res) => res.sendFile(path.join(__dirname, "strategy.html")));
 
 /* Public pages */
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "login.html")));
@@ -392,10 +384,17 @@ app.get("/login.html", (req, res) => res.sendFile(path.join(__dirname, "login.ht
 app.get("/register.html", (req, res) => res.sendFile(path.join(__dirname, "register.html")));
 app.get("/verify.html", (req, res) => res.sendFile(path.join(__dirname, "verify.html")));
 
-/* Aliases */
-app.get("/dashboard", authPageRequired, (req, res) => res.sendFile(path.join(__dirname, "dashboard.html")));
-app.get("/account", authPageRequired, (req, res) => res.sendFile(path.join(__dirname, "account.html")));
-app.get("/connect", authPageRequired, (req, res) => res.sendFile(path.join(__dirname, "connect-kraken.html")));
+app.get("/dashboard", pageAuthRequired, (req, res) => {
+  res.sendFile(path.join(__dirname, "dashboard.html"));
+});
+
+app.get("/account", pageAuthRequired, (req, res) => {
+  res.sendFile(path.join(__dirname, "account.html"));
+});
+
+app.get("/connect", pageAuthRequired, (req, res) => {
+  res.sendFile(path.join(__dirname, "connect-kraken.html"));
+});
 
 /* Static assets after protected routes */
 app.use(express.static(__dirname));
@@ -463,7 +462,6 @@ app.post("/api/login", async (req, res) => {
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
     const password = String(req.body?.password || "");
-    const nextUrl = String(req.body?.next || req.query?.next || "").trim();
 
     const user = await dbGet(`SELECT * FROM users WHERE email = ?`, [email]);
     if (!user) return res.status(400).json({ error: "Invalid login" });
@@ -480,7 +478,7 @@ app.post("/api/login", async (req, res) => {
     });
 
     const keys = await dbGet(`SELECT user_id FROM kraken_keys WHERE user_id = ?`, [user.id]);
-    return res.json({ ok: true, hasKraken: !!keys, next: nextUrl || "" });
+    return res.json({ ok: true, hasKraken: !!keys });
   } catch (err) {
     return res.status(500).json({ error: "Login failed", details: err.message });
   }
@@ -576,208 +574,6 @@ app.get("/balance", authRequired, async (req, res) => {
     res.json({ status: "Connected", balance: balance.result });
   } catch (err) {
     res.status(500).json({ error: "Failed to connect to Kraken", details: err.message });
-  }
-});
-
-/* Price cache shared */
-const priceCache = new Map();
-const PRICE_TTL_MS = 10 * 1000;
-
-async function getLastPrices(pairs) {
-  const now = Date.now();
-  const out = {};
-
-  const need = [];
-  for (const p of pairs) {
-    const hit = priceCache.get(p);
-    if (hit && (now - hit.ts) < PRICE_TTL_MS) out[p] = hit.price;
-    else need.push(p);
-  }
-
-  if (!need.length) return out;
-
-  const url = "https://api.kraken.com/0/public/Ticker?pair=" + encodeURIComponent(need.join(","));
-  const r = await fetch(url);
-  const j = await r.json().catch(() => ({}));
-  const result = j.result || {};
-
-  for (const [k, v] of Object.entries(result)) {
-    const last = Number(v?.c?.[0]);
-    if (Number.isFinite(last)) {
-      priceCache.set(k, { price: last, ts: now });
-      out[k] = last;
-    }
-  }
-
-  for (const p of need) {
-    if (out[p] !== undefined) continue;
-    const needle = String(p).replace("/", "");
-    const foundKey = Object.keys(out).find(x => String(x).replace("/", "") === needle);
-    if (foundKey) out[p] = out[foundKey];
-  }
-
-  return out;
-}
-
-/* Batch prices */
-app.get("/api/prices", authRequired, async (req, res) => {
-  try {
-    const raw = String(req.query.pairs || "");
-    const pairs = raw.split(",").map(s => s.trim()).filter(Boolean);
-    if (!pairs.length) return res.json({ ok: true, prices: {} });
-
-    const prices = await getLastPrices(pairs);
-    return res.json({ ok: true, prices });
-  } catch (e) {
-    return res.status(500).json({ ok: false, error: String(e.message || e) });
-  }
-});
-
-/* Live order status by txid */
-app.get("/api/order/status", authRequired, async (req, res) => {
-  try {
-    const txid = String(req.query.txid || "").trim();
-    if (!txid) return res.status(400).json({ ok: false, error: "txid required" });
-
-    const mine = tradeLog.find(t => String(t.userId) === String(req.user.uid) && String(t.txid) === txid);
-    if (!mine) return res.status(404).json({ ok: false, error: "Order not found" });
-
-    if (SIMULATOR_MODE) {
-      return res.json({
-        ok: true,
-        status: mine.status || "simulated",
-        vol_exec: "0.0",
-        price: mine.entryPrice ?? null
-      });
-    }
-
-    const client = await getUserKrakenClient(req.user.uid);
-    if (!client) return res.status(400).json({ ok: false, error: "No Kraken keys saved" });
-
-    const o = await queryOrder(client, txid);
-    if (!o) return res.json({ ok: true, status: "unknown" });
-
-    const status = String(o.status || "");
-    const vol_exec = String(o.vol_exec || "0");
-    const price = Number(o.price || 0);
-
-    if (status) mine.status = status;
-
-    return res.json({
-      ok: true,
-      status,
-      vol: String(o.vol || ""),
-      vol_exec,
-      price: Number.isFinite(price) ? price : null,
-      descr: o.descr || null
-    });
-  } catch (e) {
-    return res.status(500).json({ ok: false, error: String(e.message || e) });
-  }
-});
-
-/* Cancel an open order */
-app.post("/api/order/cancel", authRequired, async (req, res) => {
-  try {
-    const txid = String(req.body?.txid || "").trim();
-    if (!txid) return res.status(400).json({ ok: false, error: "txid required" });
-
-    const mine = tradeLog.find(t => String(t.userId) === String(req.user.uid) && String(t.txid) === txid);
-    if (!mine) return res.status(404).json({ ok: false, error: "Order not found" });
-
-    if (SIMULATOR_MODE) {
-      mine.status = "canceled";
-      return res.json({ ok: true, canceled: true, simulator: true });
-    }
-
-    const client = await getUserKrakenClient(req.user.uid);
-    if (!client) return res.status(400).json({ ok: false, error: "No Kraken keys saved" });
-
-    const resp = await client.api("CancelOrder", { txid });
-    const count = Number(resp?.result?.count || 0);
-
-    if (count > 0) mine.status = "canceled";
-
-    return res.json({ ok: true, canceled: count > 0, result: resp?.result || {} });
-  } catch (e) {
-    return res.status(500).json({ ok: false, error: String(e.message || e) });
-  }
-});
-
-/* Close immediately using a market order */
-app.post("/api/order/close", authRequired, async (req, res) => {
-  try {
-    const tradeId = Number(req.body?.tradeId || 0);
-    if (!tradeId) return res.status(400).json({ ok: false, error: "tradeId required" });
-
-    const mine = tradeLog.find(t => Number(t.id) === tradeId && String(t.userId) === String(req.user.uid));
-    if (!mine) return res.status(404).json({ ok: false, error: "Trade not found" });
-
-    const pair = String(mine.pair || "");
-    const volume = String(mine.volume || "");
-    const entrySide = String(mine.side || "").toLowerCase();
-
-    if (!pair || !volume || Number(volume) <= 0) {
-      return res.status(400).json({ ok: false, error: "Missing pair or volume on this trade" });
-    }
-
-    const closeSide = entrySide === "buy" ? "sell" : "buy";
-
-    if (SIMULATOR_MODE) {
-      mine.status = "closed_by_user";
-      logTrade({
-        pair,
-        side: closeSide,
-        orderType: "market",
-        investUsd: null,
-        volume,
-        entryPrice: null,
-        takeProfit: null,
-        stopLoss: null,
-        status: "simulated",
-        message: "Simulator close. No Kraken order was placed.",
-        txid: "SIM_CLOSE_" + Date.now(),
-        isAuto: false,
-        userId: req.user.uid
-      });
-
-      return res.json({ ok: true, closed: true, simulator: true });
-    }
-
-    const client = await getUserKrakenClient(req.user.uid);
-    if (!client) return res.status(400).json({ ok: false, error: "No Kraken keys saved" });
-
-    const closeParams = {
-      pair,
-      type: closeSide,
-      ordertype: "market",
-      volume
-    };
-
-    const resp = await client.api("AddOrder", closeParams);
-    const txid = Array.isArray(resp?.result?.txid) ? resp.result.txid[0] : "";
-
-    mine.status = "closed_by_user";
-
-    logTrade({
-      pair,
-      side: closeSide,
-      orderType: "market",
-      investUsd: null,
-      volume,
-      entryPrice: null,
-      takeProfit: null,
-      stopLoss: null,
-      status: "submitted",
-      message: "Close sent as market order",
-      txid,
-      isAuto: false,
-      userId: req.user.uid
-    });
-
-    return res.json({ ok: true, closed: true, txid });
-  } catch (e) {
-    return res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
 
@@ -877,11 +673,10 @@ app.post("/trade", authRequired, async (req, res) => {
     let volumeStr = null;
 
     if (investUsd && investUsd > 0) {
-      const ld = meta.lot_decimals ?? 8;
       const vol = investUsd / nums.price;
-
-      const vFloored = floorToDecimals(vol, ld);
-      volumeStr = vFloored === null ? null : trimNumberString(vFloored.toFixed(ld));
+      const ld = meta.lot_decimals ?? 8;
+      const vRounded = roundToDecimals(vol, ld);
+      volumeStr = vRounded === null ? null : trimNumberString(vRounded.toFixed(ld));
     } else {
       volumeStr = nums.volumeStr;
     }

@@ -8,36 +8,37 @@
     .card { width:360px; background:#161b22; border:2px solid #30363d; border-radius:12px; padding:18px; }
     input { width:100%; padding:10px; margin-top:8px; background:#0d1117; border:1px solid #30363d; border-radius:8px; color:#e6edf3; box-sizing:border-box; }
     button { width:100%; margin-top:12px; padding:12px; border:none; border-radius:10px; background:#58a6ff; color:white; font-weight:bold; cursor:pointer; }
-    button:disabled { opacity:0.55; cursor:not-allowed; }
     a { color:#58a6ff; text-decoration:none; }
     .msg { margin-top:10px; color:#ffcc00; font-size:13px; min-height:18px; }
-    .muted { color:#8b949e; font-size:12px; margin-top:6px; }
+    .muted { color:#8b949e; font-size:12px; margin-top:10px; }
   </style>
 </head>
 <body>
   <div class="card">
     <h2>Login</h2>
-    <input id="email" placeholder="Email" autocomplete="email" />
-    <input id="password" type="password" placeholder="Password" autocomplete="current-password" />
+    <input id="email" placeholder="Email" />
+    <input id="password" type="password" placeholder="Password" />
     <button id="btn">Login</button>
     <div class="msg" id="msg"></div>
-    <div class="muted" id="hint"></div>
+    <div class="muted" id="nextHint"></div>
     <div style="margin-top:12px;">
-      <a href="/register.html">Register</a>
+      <a href="/register">Register</a>
     </div>
   </div>
 
   <script>
-    function getNextParam() {
-      const u = new URL(window.location.href);
-      const next = String(u.searchParams.get("next") || "").trim();
-      return next;
-    }
+    function getNextPath() {
+      const params = new URLSearchParams(window.location.search);
+      const next = params.get("next");
+      if (!next) return null;
 
-    function safeNext(next) {
-      if (!next) return "";
-      if (next.startsWith("/") && !next.startsWith("//")) return next;
-      return "";
+      try {
+        const u = new URL(next, window.location.origin);
+        if (u.origin !== window.location.origin) return null;
+        return u.pathname + u.search + u.hash;
+      } catch {
+        return null;
+      }
     }
 
     async function postJson(url, payload) {
@@ -56,56 +57,32 @@
       return j;
     }
 
-    async function onLogin() {
+    const nextPath = getNextPath();
+    if (nextPath) {
+      document.getElementById("nextHint").textContent = "After login you will return to " + nextPath;
+    }
+
+    document.getElementById("btn").onclick = async () => {
       const msg = document.getElementById("msg");
-      const hint = document.getElementById("hint");
-      const btn = document.getElementById("btn");
-
       msg.textContent = "";
-      hint.textContent = "";
-
-      const email = document.getElementById("email").value.trim();
-      const password = document.getElementById("password").value;
-
-      const nextRaw = getNextParam();
-      const next = safeNext(nextRaw);
-
-      if (next) hint.textContent = "After login you will return to: " + next;
-
-      btn.disabled = true;
-      btn.textContent = "Logging in...";
 
       try {
-        const d = await postJson("/api/login", { email, password, next });
+        const email = document.getElementById("email").value.trim();
+        const password = document.getElementById("password").value;
 
-        const goNext = safeNext(String(d.next || ""));
-        if (goNext) {
-          window.location.replace(goNext);
+        const d = await postJson("/api/login", { email, password });
+
+        const next = getNextPath();
+        if (next) {
+          window.location.href = next;
           return;
         }
 
-        window.location.replace(d.hasKraken ? "/dashboard.html" : "/connect-kraken.html");
+        window.location.href = d.hasKraken ? "/dashboard" : "/connect";
       } catch (e) {
-        msg.textContent = e.message || "Login failed";
-        btn.disabled = false;
-        btn.textContent = "Login";
+        msg.textContent = e.message;
       }
-    }
-
-    document.getElementById("btn").addEventListener("click", onLogin);
-
-    document.getElementById("password").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") onLogin();
-    });
-
-    document.getElementById("email").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") onLogin();
-    });
-
-    (function initHint() {
-      const next = safeNext(getNextParam());
-      if (next) document.getElementById("hint").textContent = "After login you will return to: " + next;
-    })();
+    };
   </script>
 </body>
 </html>
