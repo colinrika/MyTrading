@@ -216,6 +216,96 @@ async function krakenApiWithNonceRetry(client, uid, method, params) {
   }
 }
 
+async function getTopUsdPairsByVolume(limit = 20) {
+  const r = await fetch("https://api.kraken.com/0/public/Ticker");
+  const j = await r.json();
+  const result = j.result || {};
+
+  const rows = [];
+
+  for (const pair of Object.keys(result)) {
+    if (!pair.endsWith("ZUSD")) continue;
+
+    const vol = Number(result[pair]?.v?.[1]);
+    if (!Number.isFinite(vol)) continue;
+
+    rows.push({ pair, vol });
+  }
+
+  rows.sort((a, b) => b.vol - a.vol);
+  return rows.slice(0, limit).map(r => r.pair);
+}
+
+
+async function computeSafestTradesNow(uid) {
+  const client = await getUserKrakenClient(uid);
+  if (!client) return [];
+
+  await ensurePairMetaLoaded(client);
+
+  const candidates = await getTopUsdPairsByVolume(20);
+
+
+  const safeTrades = [];
+
+  for (const pair of candidates) {
+    try {
+      const h1 = await fetchOHLC_Public(pair, 60, 260);
+      const h4 = await fetchOHLC_Public(pair, 240, 260);
+      const m5 = await fetchOHLC_Public(pair, 5, 120);
+
+      if (!h1.length || !h4.length || !m5.length) continue;
+
+      const last = Number(m5[m5.length - 1].close);
+      if (!Number.isFinite(last) || last <= 0) continue;
+
+      const res = { pair, last, h1, h4, m5 };
+
+      const recommended = decideStrategyOrder(res, last, AGGRESSIVE_MODE);
+
+      const side = String(recommended?.side || "");
+      const price = Number(recommended?.price);
+
+      const actionable =
+        side === "buy" &&
+        Number.isFinite(price) &&
+        price > 0 &&
+        Number(recommended?.quality || 0) >= 70;
+
+      if (!actionable) continue;
+
+      safeTrades.push({
+        pair,
+        last,
+        recommended
+      });
+    } catch {
+    }
+  }
+
+  safeTrades.sort((a, b) => Number(b.recommended.quality || 0) - Number(a.recommended.quality || 0));
+  return safeTrades.slice(0, 5);
+}
+
+async function fetchOHLC_Public(pair, intervalMin, candles) {
+  const url = "https://api.kraken.com/0/public/OHLC?pair=" + encodeURIComponent(pair) + "&interval=" + intervalMin;
+  const r = await fetch(url);
+  const j = await r.json();
+  const k = Object.keys(j.result || {}).find(x => x !== "last");
+  if (!k || !Array.isArray(j.result[k])) return [];
+
+  return j.result[k].slice(-(candles || 60)).map(x => ({
+    ts: Number(x[0]) * 1000,
+    open: Number(x[1]),
+    high: Number(x[2]),
+    low: Number(x[3]),
+    close: Number(x[4]),
+    volume: Number(x[6])
+  }));
+}
+
+
+
 function readSafeTradesFile() {
   try {
     const raw = fs.readFileSync(SAFE_TRADES_FILE, "utf8");
@@ -775,26 +865,75 @@ app.get("/trades", authRequired, async (req, res) => {
 /* Dashboard safe trades */
 app.get("/api/alerts/safest", authRequired, async (req, res) => {
   try {
-    const uid = Number(req.user.uid);
+    const uid = String(req.user.uid);
 
-    const r = await pool.query(
-      `select ts_ms, safe_trades_json from public.safe_trades_latest where user_id = $1`,
-      [uid]
-    );
+    const safeTrades = await computeSafestTradesNow(uid);
 
-    if (!r.rows.length) {
-      return res.json({ ok: true, safeTrades: [], ts: 0 });
-    }
+    latestSafeTradesByUser.set(uid, { ts: Date.now(), safeTrades });
+    writeSafeTradesFile(safeTrades);
 
-    const row = r.rows[0];
-    const safeTrades = Array.isArray(row.safe_trades_json) ? row.safe_trades_json : (row.safe_trades_json?.safeTrades || []);
-    const ts = Number(row.ts_ms || 0);
-
-    res.json({ ok: true, safeTrades, ts });
+    res.json({ ok: true, safeTrades, ts: Date.now() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
+
+app.post("/api/cron/safest", async (req, res) => {
+  try {
+    const key = String(req.headers["x-cron-key"] || "");
+    if (!process.env.CRON_KEY || key !== process.env.CRON_KEY) {
+      return res.status(401).json({ ok: false, error: "Unauthorized" });
+    }
+
+    if (!telegramConfigured()) {
+      return res.status(400).json({ ok: false, error: "Telegram not configured" });
+    }
+
+    const users = await dbAll(`SELECT id FROM users WHERE is_verified = 1`);
+
+    let sentCount = 0;
+
+    for (const u of users) {
+      const uid = String(u.id);
+
+      const safeTrades = await computeSafestTradesNow(uid);
+
+      latestSafeTradesByUser.set(uid, { ts: Date.now(), safeTrades });
+      writeSafeTradesFile(safeTrades);
+
+      if (!safeTrades.length) continue;
+
+      const sig = safeTradesSignature(safeTrades);
+      const prev = lastSafeAlertByUser.get(uid) || { sig: "", ts: 0 };
+      const now = Date.now();
+
+      const same = prev.sig === sig;
+      const inCooldown = (now - prev.ts) < ALERT_COOLDOWN_MS;
+
+      if (same || inCooldown) continue;
+
+      lastSafeAlertByUser.set(uid, { sig, ts: now });
+
+      const msg = buildTelegramMessage(safeTrades);
+      await sendTelegram(msg);
+      sentCount += 1;
+    }
+
+    res.json({ ok: true, sentCount });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+function dbAll(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows || []);
+    });
+  });
+}
+
+
 
 
 /* Alerts */
