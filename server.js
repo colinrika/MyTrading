@@ -334,31 +334,59 @@ function safeStr(v) {
   return String(v);
 }
 
-function logTrade(entry) {
+async function logTrade(entry) {
   const item = {
-    id: tradeIdSeq++,
-    time: nowIso(),
+    time_ms: Date.now(),
     pair: safeStr(entry.pair),
     side: safeStr(entry.side),
-    orderType: safeStr(entry.orderType),
-    investUsd: entry.investUsd ?? null,
+    order_type: safeStr(entry.orderType),
+    invest_usd: entry.investUsd ?? null,
     volume: safeStr(entry.volume),
-    entryPrice: entry.entryPrice ?? null,
-    takeProfit: entry.takeProfit ?? null,
-    stopLoss: entry.stopLoss ?? null,
-    estProfitUsd: entry.estProfitUsd ?? null,
-    estLossUsd: entry.estLossUsd ?? null,
+    entry_price: entry.entryPrice ?? null,
+    take_profit: entry.takeProfit ?? null,
+    stop_loss: entry.stopLoss ?? null,
+    est_profit_usd: entry.estProfitUsd ?? null,
+    est_loss_usd: entry.estLossUsd ?? null,
     status: safeStr(entry.status),
     message: safeStr(entry.message),
     txid: safeStr(entry.txid || ""),
-    isAuto: entry.isAuto === true,
-    userId: entry.userId ?? null
+    is_auto: entry.isAuto === true,
+    user_id: entry.userId ?? null
   };
 
-  tradeLog.unshift(item);
-  if (tradeLog.length > 2000) tradeLog.length = 2000;
-  return item;
+  if (!item.user_id) return null;
+
+  const q = `
+    insert into public.trades
+      (user_id, time_ms, pair, side, order_type, invest_usd, volume, entry_price, take_profit, stop_loss, est_profit_usd, est_loss_usd, status, message, txid, is_auto)
+    values
+      ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+    returning id
+  `;
+
+  const vals = [
+    item.user_id,
+    item.time_ms,
+    item.pair,
+    item.side,
+    item.order_type,
+    item.invest_usd,
+    item.volume,
+    item.entry_price,
+    item.take_profit,
+    item.stop_loss,
+    item.est_profit_usd,
+    item.est_loss_usd,
+    item.status,
+    item.message,
+    item.txid,
+    item.is_auto
+  ];
+
+  const r = await pool.query(q, vals);
+  return { ...item, id: r.rows?.[0]?.id ?? null };
 }
+
 
 /* Telegram alerts */
 const ALERT_COOLDOWN_MS = 10 * 60 * 1000;
@@ -680,53 +708,114 @@ app.get("/balance", authRequired, async (req, res) => {
 
 /* Trades list for account.html */
 app.get("/trades", authRequired, async (req, res) => {
-  const page = Math.max(1, Number(req.query.page || 1));
-  const limit = Math.max(1, Math.min(100, Number(req.query.limit || req.query.pageSize || 10)));
-  const q = String(req.query.q || "").trim().toLowerCase();
+  try {
+    const page = Math.max(1, Number(req.query.page || 1));
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit || req.query.pageSize || 10)));
+    const q = String(req.query.q || "").trim().toLowerCase();
 
-  let filtered = tradeLog.filter(t => String(t.userId) === String(req.user.uid));
-  if (q) {
-    filtered = filtered.filter(t => {
-      const hay = (t.pair + " " + t.side + " " + t.orderType + " " + t.status + " " + t.message).toLowerCase();
-      return hay.includes(q);
-    });
+    const uid = Number(req.user.uid);
+    const offset = (page - 1) * limit;
+
+    const whereParts = ["user_id = $1"];
+    const vals = [uid];
+    let idx = 2;
+
+    if (q) {
+      whereParts.push(`(
+        lower(pair) like $${idx} or
+        lower(side) like $${idx} or
+        lower(status) like $${idx} or
+        lower(message) like $${idx} or
+        lower(order_type) like $${idx} or
+        lower(coalesce(txid,'')) like $${idx}
+      )`);
+      vals.push(`%${q}%`);
+      idx += 1;
+    }
+
+    const whereSql = whereParts.join(" and ");
+
+    const countSql = `select count(*)::bigint as c from public.trades where ${whereSql}`;
+    const listSql = `
+      select
+        id,
+        to_timestamp(time_ms / 1000.0) as time,
+        pair,
+        side,
+        status,
+        order_type as "orderType",
+        invest_usd as "investUsd",
+        volume,
+        entry_price as "entryPrice",
+        take_profit as "takeProfit",
+        stop_loss as "stopLoss",
+        est_profit_usd as "estProfitUsd",
+        est_loss_usd as "estLossUsd",
+        message,
+        txid,
+        is_auto as "isAuto"
+      from public.trades
+      where ${whereSql}
+      order by time_ms desc
+      limit $${idx} offset $${idx + 1}
+    `;
+
+    const countRes = await pool.query(countSql, vals);
+    const total = Number(countRes.rows?.[0]?.c || 0);
+
+    const listRes = await pool.query(listSql, [...vals, limit, offset]);
+    const items = listRes.rows || [];
+
+    res.json({ page, limit, total, items });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to load trades", details: String(e.message || e) });
   }
-
-  const total = filtered.length;
-  const start = (page - 1) * limit;
-  const items = filtered.slice(start, start + limit);
-
-  res.json({ page, limit, total, items });
 });
 
 /* Dashboard safe trades */
 app.get("/api/alerts/safest", authRequired, async (req, res) => {
-  const uid = String(req.user.uid);
-  const rec = latestSafeTradesByUser.get(uid);
-  let safeTrades = Array.isArray(rec?.safeTrades) ? rec.safeTrades : [];
-  let ts = rec?.ts || 0;
+  try {
+    const uid = Number(req.user.uid);
 
-  if (!safeTrades.length) {
-    const fallback = readSafeTradesFile();
-    safeTrades = fallback.safeTrades;
-    ts = ts || fallback.ts || 0;
-    if (safeTrades.length) latestSafeTradesByUser.set(uid, { ts: ts || Date.now(), safeTrades });
+    const r = await pool.query(
+      `select ts_ms, safe_trades_json from public.safe_trades_latest where user_id = $1`,
+      [uid]
+    );
+
+    if (!r.rows.length) {
+      return res.json({ ok: true, safeTrades: [], ts: 0 });
+    }
+
+    const row = r.rows[0];
+    const safeTrades = Array.isArray(row.safe_trades_json) ? row.safe_trades_json : (row.safe_trades_json?.safeTrades || []);
+    const ts = Number(row.ts_ms || 0);
+
+    res.json({ ok: true, safeTrades, ts });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
   }
-
-  res.json({ ok: true, safeTrades, ts });
 });
+
 
 /* Alerts */
 app.post("/api/alerts/safest", authRequired, async (req, res) => {
   try {
     const safeTrades = Array.isArray(req.body?.safeTrades) ? req.body.safeTrades : [];
-    const uid = String(req.user.uid);
+    const uid = Number(req.user.uid);
+    const tsMs = Date.now();
 
-    latestSafeTradesByUser.set(uid, { ts: Date.now(), safeTrades });
-    writeSafeTradesFile(safeTrades);
+    await pool.query(
+      `
+      insert into public.safe_trades_latest (user_id, ts_ms, safe_trades_json)
+      values ($1, $2, $3::jsonb)
+      on conflict (user_id)
+      do update set ts_ms = excluded.ts_ms, safe_trades_json = excluded.safe_trades_json
+      `,
+      [uid, tsMs, JSON.stringify(safeTrades)]
+    );
 
     if (!safeTrades.length) {
-      lastSafeAlertByUser.set(uid, { sig: "", ts: 0 });
+      lastSafeAlertByUser.set(String(uid), { sig: "", ts: 0 });
       return res.json({ ok: true, sent: false, reason: "empty" });
     }
 
@@ -735,7 +824,7 @@ app.post("/api/alerts/safest", authRequired, async (req, res) => {
     }
 
     const sig = safeTradesSignature(safeTrades);
-    const prev = lastSafeAlertByUser.get(uid) || { sig: "", ts: 0 };
+    const prev = lastSafeAlertByUser.get(String(uid)) || { sig: "", ts: 0 };
     const now = Date.now();
 
     const same = prev.sig === sig;
@@ -745,7 +834,7 @@ app.post("/api/alerts/safest", authRequired, async (req, res) => {
       return res.json({ ok: true, sent: false, reason: same ? "already_sent_for_this_set" : "cooldown" });
     }
 
-    lastSafeAlertByUser.set(uid, { sig, ts: now });
+    lastSafeAlertByUser.set(String(uid), { sig, ts: now });
 
     const msg = buildTelegramMessage(safeTrades);
     const tg = await sendTelegram(msg);
@@ -755,6 +844,7 @@ app.post("/api/alerts/safest", authRequired, async (req, res) => {
     return res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
+
 
 /* Trade endpoint */
 app.post("/trade", authRequired, async (req, res) => {
@@ -769,7 +859,7 @@ app.post("/trade", authRequired, async (req, res) => {
     if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
 
     if (!pair || !side) {
-      logTrade({ pair, side, orderType, investUsd, volume: "", status: "error", message: "Missing pair or side", userId: req.user.uid });
+      await logTrade({ pair, side, orderType, investUsd, volume: "", status: "error", message: "Missing pair or side", userId: req.user.uid });
       return res.status(400).json({ error: "Missing required trade parameters" });
     }
 
@@ -777,7 +867,7 @@ app.post("/trade", authRequired, async (req, res) => {
     const nums = formatOrderNumbers(meta, raw);
 
     if (!nums.price) {
-      logTrade({ pair, side, orderType, investUsd, volume: "", status: "error", message: "Invalid price", userId: req.user.uid });
+      await logTrade({ pair, side, orderType, investUsd, volume: "", status: "error", message: "Invalid price", userId: req.user.uid });
       return res.status(400).json({ error: "Invalid price" });
     }
 
@@ -793,7 +883,7 @@ app.post("/trade", authRequired, async (req, res) => {
     }
 
     if (!volumeStr || Number(volumeStr) <= 0) {
-      logTrade({ pair, side, orderType, investUsd, volume: "", status: "error", message: "Invalid volume", userId: req.user.uid });
+      await logTrade({ pair, side, orderType, investUsd, volume: "", status: "error", message: "Invalid volume", userId: req.user.uid });
       return res.status(400).json({ error: "Invalid volume" });
     }
 
@@ -808,7 +898,7 @@ app.post("/trade", authRequired, async (req, res) => {
           ? meta.costmin
           : (meta.ordermin !== null ? meta.ordermin * nums.price : null);
 
-      logTrade({
+      await logTrade({
         pair, side, orderType, investUsd, volume: volumeStr,
         entryPrice: nums.price,
         takeProfit: nums.takeProfit ?? clampPrice(meta, nums.price * 1.05),
@@ -857,7 +947,7 @@ app.post("/trade", authRequired, async (req, res) => {
       const fakeTxid = "SIM_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
       const msgTxt = "Simulator mode. No Kraken order was placed.";
 
-      logTrade({
+      await logTrade({
         pair, side, orderType, investUsd,
         volume: volumeStr,
         entryPrice,
@@ -897,7 +987,7 @@ app.post("/trade", authRequired, async (req, res) => {
       ? "Entry placed and filled. Exits can be handled after fill."
       : "Entry placed. Exits will be handled after fill.";
 
-    logTrade({
+    await logTrade({
       pair, side, orderType, investUsd,
       volume: volumeStr,
       entryPrice,
@@ -923,7 +1013,7 @@ app.post("/trade", authRequired, async (req, res) => {
   } catch (err) {
     const details = err.response?.error || err.message || "Trade execution failed";
 
-    logTrade({
+    await logTrade({
       pair, side, orderType, investUsd,
       volume: safeStr(raw.volume),
       entryPrice: numOrNull(raw.price),

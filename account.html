@@ -187,12 +187,13 @@
           wrap.appendChild(row);
         }
 
-        const avail = Number(d.tradeBalance?.available);
+        const avail = Number(d.availableZusd);
         if (Number.isFinite(avail)) {
           document.getElementById("availText").textContent = "Available ZUSD for trading " + avail.toFixed(4);
         } else {
           document.getElementById("availText").textContent = "";
         }
+
 
         document.getElementById("updatedText").textContent = "Updated " + new Date().toLocaleTimeString();
       } catch (e) {
