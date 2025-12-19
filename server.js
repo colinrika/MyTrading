@@ -658,25 +658,25 @@ function safeTradesSignature(safeTrades) {
     .join(";");
 }
 
-function buildTelegramMessage(safeTrades) {
+function buildTelegramMessage(actionableBuys) {
   const now = new Date().toLocaleString();
   let msg = `Trade available ${now}\n\n`;
 
-  for (const t of safeTrades.slice(0, 3)) {
+  for (const t of actionableBuys.slice(0, 3)) {
     const rec = t.recommended || {};
     const entry = Number(rec.price ?? t.last ?? 0);
 
     msg += `${prettyPair(t.pair)}\n`;
-    msg += `ACTION BUY\n`;
-    msg += `Quality ${Number(rec.quality || 0)}\n`;
+    msg += `BUY  Quality ${Number(rec.quality || 0)}\n`;
     msg += `Entry ${entry.toFixed(6)}\n`;
-    if (rec.takeProfit !== null && rec.takeProfit !== undefined) msg += `TP ${Number(rec.takeProfit).toFixed(6)}\n`;
-    if (rec.stopLoss !== null && rec.stopLoss !== undefined) msg += `SL ${Number(rec.stopLoss).toFixed(6)}\n`;
-    msg += `Open ${String(process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "")}/strategy.html?pair=${encodeURIComponent(t.pair)}\n\n`;
+    if (rec.takeProfit != null) msg += `TP ${Number(rec.takeProfit).toFixed(6)}\n`;
+    if (rec.stopLoss != null) msg += `SL ${Number(rec.stopLoss).toFixed(6)}\n`;
+    msg += `\n`;
   }
 
   return msg;
 }
+
 
 
 /* Protected pages */
@@ -1050,24 +1050,6 @@ app.post("/api/cron/safest", async (req, res) => {
   }
 });
 
-function buildTelegramMessage(actionableBuys) {
-  const now = new Date().toLocaleString();
-  let msg = `Trade available ${now}\n\n`;
-
-  for (const t of actionableBuys.slice(0, 3)) {
-    const rec = t.recommended || {};
-    const entry = Number(rec.price ?? t.last ?? 0);
-
-    msg += `${prettyPair(t.pair)}\n`;
-    msg += `BUY  Quality ${Number(rec.quality || 0)}\n`;
-    msg += `Entry ${entry.toFixed(6)}\n`;
-    if (rec.takeProfit != null) msg += `TP ${Number(rec.takeProfit).toFixed(6)}\n`;
-    if (rec.stopLoss != null) msg += `SL ${Number(rec.stopLoss).toFixed(6)}\n`;
-    msg += `\n`;
-  }
-
-  return msg;
-}
 
 
 
