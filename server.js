@@ -28,6 +28,7 @@ function nowMs() { return Date.now(); }
 function nowIso() { return new Date().toISOString(); }
 
 const SIMULATOR_MODE = String(process.env.SIMULATOR_MODE || "false").toLowerCase() === "true";
+const AGGRESSIVE_MODE = String(process.env.AGGRESSIVE_MODE || "false").toLowerCase() === "true";
 
 const APP_SECRET = process.env.APP_SECRET || "";
 const ENC_KEY_B64 = process.env.ENC_KEY_BASE64 || "";
@@ -170,6 +171,35 @@ async function initDb() {
       last_nonce BIGINT NOT NULL DEFAULT 0,
       updated_at BIGINT NOT NULL
     );
+  `);
+
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS public.trades (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      time_ms BIGINT NOT NULL,
+      pair TEXT NOT NULL,
+      side TEXT NOT NULL,
+      order_type TEXT NOT NULL,
+      invest_usd NUMERIC,
+      volume NUMERIC,
+      entry_price NUMERIC,
+      take_profit NUMERIC,
+      stop_loss NUMERIC,
+      est_profit_usd NUMERIC,
+      est_loss_usd NUMERIC,
+      status TEXT NOT NULL,
+      message TEXT,
+      txid TEXT,
+      exit_tp_txid TEXT,
+      exit_sl_txid TEXT,
+      exit_status TEXT NOT NULL DEFAULT 'none',
+      is_auto BOOLEAN NOT NULL DEFAULT FALSE
+    );
+  `);
+
+  await dbRun(`
+    CREATE INDEX IF NOT EXISTS trades_user_time_idx ON public.trades (user_id, time_ms DESC);
   `);
 }
 
@@ -661,12 +691,6 @@ app.get("/dashboard", pageAuthRequired, (req, res) => res.redirect("/dashboard.h
 app.get("/account", pageAuthRequired, (req, res) => res.redirect("/account.html"));
 app.get("/connect", pageAuthRequired, (req, res) => res.redirect("/connect.html"));
 app.get("/strategy", pageAuthRequired, (req, res) => res.redirect("/strategy.html"));
-
-
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, "login.html")));
-app.get("/login.html", (req, res) => res.sendFile(path.join(__dirname, "login.html")));
-app.get("/register.html", (req, res) => res.sendFile(path.join(__dirname, "register.html")));
-app.get("/verify.html", (req, res) => res.sendFile(path.join(__dirname, "verify.html")));
 
 /* Static assets after protected routes */
 app.use(express.static(__dirname));
