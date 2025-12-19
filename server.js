@@ -65,6 +65,7 @@ async function dbAll(sql, params = []) {
   return r.rows || [];
 }
 
+
 async function updateTrade(id, patch) {
   const keys = Object.keys(patch || {});
   if (!keys.length) return;
@@ -991,7 +992,8 @@ app.post("/api/cron/safest", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Telegram not configured" });
     }
 
-    const users = await dbAll(`SELECT id FROM users WHERE is_verified = 1`);
+    const users = await dbAll(`select id from public.users where is_verified = true`);
+
 
     let sentCount = 0;
 
