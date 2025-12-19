@@ -59,6 +59,81 @@ async function dbRun(sql, params = []) {
   return pool.query(sql, params);
 }
 
+async function dbAll(sql, params = []) {
+  const r = await pool.query(sql, params);
+  return r.rows || [];
+}
+
+async function updateTrade(id, patch) {
+  const keys = Object.keys(patch || {});
+  if (!keys.length) return;
+
+  const sets = [];
+  const vals = [];
+  let i = 1;
+
+  for (const k of keys) {
+    sets.push(`${k} = $${i}`);
+    vals.push(patch[k]);
+    i += 1;
+  }
+
+  vals.push(id);
+  const q = `update public.trades set ${sets.join(", ")} where id = $${i}`;
+  await pool.query(q, vals);
+}
+
+async function getTradeById(id) {
+  return await dbGet(`select * from public.trades where id = $1`, [id]);
+}
+
+async function placeExitOrders({ uid, tradeId, pair, volumeStr, takeProfit, stopLoss }) {
+  const client = await getUserKrakenClient(uid);
+  if (!client) throw new Error("No Kraken keys saved");
+
+  const meta = await getPairMeta(client, pair);
+
+  const tp = clampPrice(meta, takeProfit);
+  const sl = clampPrice(meta, stopLoss);
+  if (!tp || !sl) throw new Error("Invalid TP or SL");
+
+  const volume = String(volumeStr);
+
+  const tpParams = {
+    pair,
+    type: "sell",
+    ordertype: "take-profit",
+    price: String(tp),
+    volume,
+    oflags: "reduce-only"
+  };
+
+  const slParams = {
+    pair,
+    type: "sell",
+    ordertype: "stop-loss",
+    price: String(sl),
+    volume,
+    oflags: "reduce-only"
+  };
+
+  const tpResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", tpParams);
+  const tpTxid = Array.isArray(tpResp?.result?.txid) ? tpResp.result.txid[0] : "";
+
+  const slResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", slParams);
+  const slTxid = Array.isArray(slResp?.result?.txid) ? slResp.result.txid[0] : "";
+
+  await updateTrade(tradeId, {
+    exit_tp_txid: tpTxid || null,
+    exit_sl_txid: slTxid || null,
+    exit_status: "open"
+  });
+
+  return { tpTxid, slTxid };
+}
+
+
+
 async function dbGet(sql, params = []) {
   const r = await pool.query(sql, params);
   return r.rows && r.rows.length ? r.rows[0] : null;
@@ -927,14 +1002,7 @@ app.post("/api/cron/safest", async (req, res) => {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
-function dbAll(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows || []);
-    });
-  });
-}
+
 
 
 
@@ -985,6 +1053,68 @@ app.post("/api/alerts/safest", authRequired, async (req, res) => {
   }
 });
 
+app.post("/api/order/close", authRequired, async (req, res) => {
+  try {
+    const tradeId = Number(req.body?.tradeId);
+    if (!tradeId) {
+      return res.status(400).json({ error: "Missing tradeId" });
+    }
+
+    const trade = await dbGet(
+      `select * from public.trades where id = $1 and user_id = $2`,
+      [tradeId, req.user.uid]
+    );
+
+    if (!trade) {
+      return res.status(404).json({ error: "Trade not found" });
+    }
+
+    if (String(trade.side).toLowerCase() !== "buy") {
+      return res.status(400).json({ error: "Only BUY trades can be force-closed" });
+    }
+
+    const client = await getUserKrakenClient(req.user.uid);
+    if (!client) {
+      return res.status(400).json({ error: "No Kraken keys saved" });
+    }
+
+    const volume = Number(trade.volume);
+    if (!Number.isFinite(volume) || volume <= 0) {
+      return res.status(400).json({ error: "Invalid trade volume" });
+    }
+
+    const sellParams = {
+      pair: trade.pair,
+      type: "sell",
+      ordertype: "market",
+      volume: volume.toString()
+    };
+
+    const result = await krakenApiWithNonceRetry(
+      client,
+      req.user.uid,
+      "AddOrder",
+      sellParams
+    );
+
+    const txid = Array.isArray(result?.result?.txid)
+      ? result.result.txid[0]
+      : "";
+
+    await dbRun(
+      `update public.trades
+       set status = 'closed', message = 'Force sold at market'
+       where id = $1`,
+      [tradeId]
+    );
+
+    res.json({ ok: true, closed: true, txid });
+  } catch (e) {
+    res.status(500).json({ error: "Force close failed", details: String(e.message || e) });
+  }
+});
+
+
 
 
 /* Trade endpoint */
@@ -1023,6 +1153,8 @@ app.post("/trade", authRequired, async (req, res) => {
       volumeStr = nums.volumeStr;
     }
 
+    const volumeNum = Number(volumeStr);
+
     if (!volumeStr || Number(volumeStr) <= 0) {
       await logTrade({ pair, side, orderType, investUsd, volume: "", status: "error", message: "Invalid volume", userId: req.user.uid });
       return res.status(400).json({ error: "Invalid volume" });
@@ -1040,7 +1172,7 @@ app.post("/trade", authRequired, async (req, res) => {
           : (meta.ordermin !== null ? meta.ordermin * nums.price : null);
 
       await logTrade({
-        pair, side, orderType, investUsd, volume: volumeStr,
+        pair, side, orderType, investUsd, volume: volumeNum,
         entryPrice: nums.price,
         takeProfit: nums.takeProfit ?? clampPrice(meta, nums.price * 1.05),
         stopLoss: nums.stopLoss ?? clampPrice(meta, nums.price * 0.93),
@@ -1072,7 +1204,7 @@ app.post("/trade", authRequired, async (req, res) => {
       pair,
       type: side,
       ordertype: orderType,
-      volume: volumeStr
+      volume: volumeNum
     };
 
     if (orderType === "limit") {
@@ -1090,7 +1222,7 @@ app.post("/trade", authRequired, async (req, res) => {
 
       await logTrade({
         pair, side, orderType, investUsd,
-        volume: volumeStr,
+        volume: volumeNum,
         entryPrice,
         takeProfit,
         stopLoss,
@@ -1106,7 +1238,7 @@ app.post("/trade", authRequired, async (req, res) => {
       return res.json({
         message: msgTxt,
         entryTxid: fakeTxid,
-        normalized: { entryPrice, entryPrice2, takeProfit, stopLoss, volume: volumeStr },
+        normalized: { entryPrice, entryPrice2, takeProfit, stopLoss, volume: volumeNum },
         simulator: true
       });
     }
@@ -1130,7 +1262,7 @@ app.post("/trade", authRequired, async (req, res) => {
 
     await logTrade({
       pair, side, orderType, investUsd,
-      volume: volumeStr,
+      volume: volumeNum,
       entryPrice,
       takeProfit,
       stopLoss,
@@ -1148,7 +1280,7 @@ app.post("/trade", authRequired, async (req, res) => {
       entry: mainOrder.result,
       entryTxid: txid,
       entryStatus: entryStatus ? { status: entryStatus.status, vol: entryStatus.vol, vol_exec: entryStatus.vol_exec } : null,
-      normalized: { entryPrice, entryPrice2, takeProfit, stopLoss, volume: volumeStr }
+      normalized: { entryPrice, entryPrice2, takeProfit, stopLoss, volume: volumeNum }
     });
 
   } catch (err) {
@@ -1169,6 +1301,100 @@ app.post("/trade", authRequired, async (req, res) => {
     res.status(500).json({ error: "Trade execution failed", details });
   }
 });
+
+const EXIT_WATCH_INTERVAL_MS = Number(process.env.EXIT_WATCH_INTERVAL_MS || 15000);
+
+async function cancelOrder(client, uid, txid) {
+  if (!txid) return;
+  try {
+    await krakenApiWithNonceRetry(client, uid, "CancelOrder", { txid });
+  } catch {
+  }
+}
+
+async function watchExitsOnce() {
+  const rows = await dbAll(
+    `select id, user_id, pair, volume, take_profit, stop_loss, txid, exit_tp_txid, exit_sl_txid, exit_status, status
+     from public.trades
+     where status in ('filled','submitted') and exit_status in ('open','none')`
+  );
+
+  for (const t of rows) {
+    const uid = String(t.user_id);
+
+    const client = await getUserKrakenClient(uid);
+    if (!client) continue;
+
+    const entryTxid = String(t.txid || "");
+    const tpTxid = String(t.exit_tp_txid || "");
+    const slTxid = String(t.exit_sl_txid || "");
+
+    if (t.status !== "filled") {
+      if (entryTxid) {
+        try {
+          const entry = await queryOrder(client, uid, entryTxid);
+          const filled =
+            entry &&
+            String(entry.status || "").toLowerCase() === "closed" &&
+            Number(entry.vol_exec || 0) > 0;
+
+          if (!filled) continue;
+
+          await updateTrade(t.id, { status: "filled" });
+        } catch {
+          continue;
+        }
+      } else {
+        continue;
+      }
+    }
+
+    if (t.exit_status === "none") {
+      if (!t.take_profit || !t.stop_loss || !t.volume) continue;
+      try {
+        await placeExitOrders({
+          uid,
+          tradeId: t.id,
+          pair: t.pair,
+          volumeStr: String(t.volume),
+          takeProfit: Number(t.take_profit),
+          stopLoss: Number(t.stop_loss)
+        });
+      } catch {
+        continue;
+      }
+      continue;
+    }
+
+    if (t.exit_status !== "open") continue;
+
+    let tpOrder = null;
+    let slOrder = null;
+
+    try { if (tpTxid) tpOrder = await queryOrder(client, uid, tpTxid); } catch {}
+    try { if (slTxid) slOrder = await queryOrder(client, uid, slTxid); } catch {}
+
+    const tpClosed = tpOrder && String(tpOrder.status || "").toLowerCase() === "closed" && Number(tpOrder.vol_exec || 0) > 0;
+    const slClosed = slOrder && String(slOrder.status || "").toLowerCase() === "closed" && Number(slOrder.vol_exec || 0) > 0;
+
+    if (tpClosed) {
+      await cancelOrder(client, uid, slTxid);
+      await updateTrade(t.id, { exit_status: "tp_filled", status: "closed", message: "Take profit filled. Stop loss canceled." });
+      continue;
+    }
+
+    if (slClosed) {
+      await cancelOrder(client, uid, tpTxid);
+      await updateTrade(t.id, { exit_status: "sl_filled", status: "closed", message: "Stop loss filled. Take profit canceled." });
+      continue;
+    }
+  }
+}
+
+setInterval(() => {
+  watchExitsOnce().catch(() => {});
+}, EXIT_WATCH_INTERVAL_MS);
+
 
 /* JSON parse guard */
 app.use((err, req, res, next) => {
