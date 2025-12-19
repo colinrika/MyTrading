@@ -597,6 +597,17 @@ function onlyActionableBuys(safeTrades) {
     .filter(t => Number(t?.recommended?.quality || 0) >= 70); // optional quality gate
 }
 
+function actionableBuysOnly(safeTrades) {
+  return (Array.isArray(safeTrades) ? safeTrades : [])
+    .filter(t => String(t?.recommended?.side || "").toLowerCase() === "buy")
+    .filter(t => Number(t?.recommended?.quality || 0) >= 70)
+    .filter(t => {
+      const p = Number(t?.recommended?.price);
+      return Number.isFinite(p) && p > 0;
+    });
+}
+
+
 
 function telegramConfigured() {
   const enabled = String(process.env.TELEGRAM_ENABLED || "").toLowerCase() === "true";
@@ -1007,20 +1018,30 @@ app.post("/api/cron/safest", async (req, res) => {
 
       if (!safeTrades.length) continue;
 
-      const sig = safeTradesSignature(safeTrades);
+      //const safeTrades = await computeSafestTradesNow(uid);
+
+      // Always store for dashboard (full list)
+      latestSafeTradesByUser.set(uid, { ts: Date.now(), safeTrades });
+      writeSafeTradesFile(safeTrades);
+
+      // Telegram should only fire if we have actionable BUY signals
+      const actionable = actionableBuysOnly(safeTrades);
+      if (!actionable.length) continue;
+
+      const sig = safeTradesSignature(actionable);
       const prev = lastSafeAlertByUser.get(uid) || { sig: "", ts: 0 };
       const now = Date.now();
 
       const same = prev.sig === sig;
       const inCooldown = (now - prev.ts) < ALERT_COOLDOWN_MS;
-
       if (same || inCooldown) continue;
 
       lastSafeAlertByUser.set(uid, { sig, ts: now });
 
-      const msg = buildTelegramMessage(safeTrades);
+      const msg = buildTelegramMessage(actionable);
       await sendTelegram(msg);
       sentCount += 1;
+
     }
 
     res.json({ ok: true, sentCount });
@@ -1029,6 +1050,24 @@ app.post("/api/cron/safest", async (req, res) => {
   }
 });
 
+function buildTelegramMessage(actionableBuys) {
+  const now = new Date().toLocaleString();
+  let msg = `Trade available ${now}\n\n`;
+
+  for (const t of actionableBuys.slice(0, 3)) {
+    const rec = t.recommended || {};
+    const entry = Number(rec.price ?? t.last ?? 0);
+
+    msg += `${prettyPair(t.pair)}\n`;
+    msg += `BUY  Quality ${Number(rec.quality || 0)}\n`;
+    msg += `Entry ${entry.toFixed(6)}\n`;
+    if (rec.takeProfit != null) msg += `TP ${Number(rec.takeProfit).toFixed(6)}\n`;
+    if (rec.stopLoss != null) msg += `SL ${Number(rec.stopLoss).toFixed(6)}\n`;
+    msg += `\n`;
+  }
+
+  return msg;
+}
 
 
 
@@ -1397,8 +1436,8 @@ async function watchExitsOnce() {
     let tpOrder = null;
     let slOrder = null;
 
-    try { if (tpTxid) tpOrder = await queryOrder(client, uid, tpTxid); } catch {}
-    try { if (slTxid) slOrder = await queryOrder(client, uid, slTxid); } catch {}
+    try { if (tpTxid) tpOrder = await queryOrder(client, uid, tpTxid); } catch { }
+    try { if (slTxid) slOrder = await queryOrder(client, uid, slTxid); } catch { }
 
     const tpClosed = tpOrder && String(tpOrder.status || "").toLowerCase() === "closed" && Number(tpOrder.vol_exec || 0) > 0;
     const slClosed = slOrder && String(slOrder.status || "").toLowerCase() === "closed" && Number(slOrder.vol_exec || 0) > 0;
@@ -1418,7 +1457,7 @@ async function watchExitsOnce() {
 }
 
 setInterval(() => {
-  watchExitsOnce().catch(() => {});
+  watchExitsOnce().catch(() => { });
 }, EXIT_WATCH_INTERVAL_MS);
 
 
