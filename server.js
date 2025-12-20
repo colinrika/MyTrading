@@ -322,6 +322,32 @@ async function krakenApiWithNonceRetry(client, uid, method, params) {
   }
 }
 
+const STABLE_BASES = new Set([
+  "USDT", "USDC", "DAI", "USDG", "TUSD", "PYUSD"
+]);
+
+function baseFromPair(pair) {
+  // Handles common Kraken formats like XRPZUSD, USDGZUSD, XBTZUSD
+  const s = String(pair || "").toUpperCase();
+
+  // If it ends with ZUSD, base is everything before ZUSD
+  if (s.endsWith("ZUSD")) return s.slice(0, -4);
+
+  // Fallback, try split if you ever pass wsname like XRP/USD
+  if (s.includes("/")) return s.split("/")[0];
+
+  return s;
+}
+
+function isStablePair(pair) {
+  const base = baseFromPair(pair);
+  return STABLE_BASES.has(base);
+}
+
+// inside computeSafestTradesNow loop
+//if (isStablePair(pair)) continue;
+
+
 async function getTopUsdPairsByVolume(limit = 20) {
   const r = await fetch("https://api.kraken.com/0/public/Ticker");
   const j = await r.json();
@@ -332,6 +358,9 @@ async function getTopUsdPairsByVolume(limit = 20) {
   for (const pair of Object.keys(result)) {
     if (!pair.endsWith("ZUSD")) continue;
 
+    const base = baseFromPair(pair);
+    if (STABLE_BASES.has(base)) continue;
+
     const vol = Number(result[pair]?.v?.[1]);
     if (!Number.isFinite(vol)) continue;
 
@@ -339,8 +368,9 @@ async function getTopUsdPairsByVolume(limit = 20) {
   }
 
   rows.sort((a, b) => b.vol - a.vol);
-  return rows.slice(0, limit).map(r => r.pair);
+  return rows.slice(0, limit).map(x => x.pair);
 }
+
 
 
 async function computeSafestTradesNow(uid) {
@@ -356,6 +386,10 @@ async function computeSafestTradesNow(uid) {
 
   for (const pair of candidates) {
     try {
+      if (isStablePair(pair)) {
+        continue;
+      }
+
       const h1 = await fetchOHLC_Public(pair, 60, 260);
       const h4 = await fetchOHLC_Public(pair, 240, 260);
       const m5 = await fetchOHLC_Public(pair, 5, 120);
@@ -676,6 +710,31 @@ function buildTelegramMessage(actionableBuys) {
 
   return msg;
 }
+
+function onlyActionableBuys(safeTrades) {
+  return (Array.isArray(safeTrades) ? safeTrades : [])
+    .filter(t => String(t?.recommended?.side || "").toLowerCase() === "buy")
+    .filter(t => Number(t?.recommended?.quality || 0) >= 70);
+}
+
+function buildTelegramMessage(actionableBuys) {
+  const now = new Date().toLocaleString();
+  let msg = `Trade available ${now}\n\n`;
+
+  for (const t of actionableBuys.slice(0, 3)) {
+    const rec = t.recommended || {};
+    const entry = Number(rec.price ?? t.last ?? 0);
+
+    msg += `${prettyPair(t.pair)}\n`;
+    msg += `BUY  Quality ${Number(rec.quality || 0)}\n`;
+    msg += `Entry ${entry.toFixed(6)}\n`;
+    if (rec.takeProfit != null) msg += `TP ${Number(rec.takeProfit).toFixed(6)}\n`;
+    if (rec.stopLoss != null) msg += `SL ${Number(rec.stopLoss).toFixed(6)}\n`;
+    msg += `\n`;
+  }
+  return msg;
+}
+
 
 
 
