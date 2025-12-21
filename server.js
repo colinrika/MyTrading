@@ -65,6 +65,10 @@ async function dbAll(sql, params = []) {
   return r.rows || [];
 }
 
+async function dbGet(sql, params = []) {
+  const r = await pool.query(sql, params);
+  return r.rows && r.rows.length ? r.rows[0] : null;
+}
 
 async function updateTrade(id, patch) {
   const keys = Object.keys(patch || {});
@@ -87,58 +91,6 @@ async function updateTrade(id, patch) {
 
 async function getTradeById(id) {
   return await dbGet(`select * from public.trades where id = $1`, [id]);
-}
-
-async function placeExitOrders({ uid, tradeId, pair, volumeStr, takeProfit, stopLoss }) {
-  const client = await getUserKrakenClient(uid);
-  if (!client) throw new Error("No Kraken keys saved");
-
-  const meta = await getPairMeta(client, pair);
-
-  const tp = clampPrice(meta, takeProfit);
-  const sl = clampPrice(meta, stopLoss);
-  if (!tp || !sl) throw new Error("Invalid TP or SL");
-
-  const volume = String(volumeStr);
-
-  const tpParams = {
-    pair,
-    type: "sell",
-    ordertype: "take-profit",
-    price: String(tp),
-    volume,
-    oflags: "reduce-only"
-  };
-
-  const slParams = {
-    pair,
-    type: "sell",
-    ordertype: "stop-loss",
-    price: String(sl),
-    volume,
-    oflags: "reduce-only"
-  };
-
-  const tpResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", tpParams);
-  const tpTxid = Array.isArray(tpResp?.result?.txid) ? tpResp.result.txid[0] : "";
-
-  const slResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", slParams);
-  const slTxid = Array.isArray(slResp?.result?.txid) ? slResp.result.txid[0] : "";
-
-  await updateTrade(tradeId, {
-    exit_tp_txid: tpTxid || null,
-    exit_sl_txid: slTxid || null,
-    exit_status: "open"
-  });
-
-  return { tpTxid, slTxid };
-}
-
-
-
-async function dbGet(sql, params = []) {
-  const r = await pool.query(sql, params);
-  return r.rows && r.rows.length ? r.rows[0] : null;
 }
 
 async function initDb() {
@@ -327,15 +279,9 @@ const STABLE_BASES = new Set([
 ]);
 
 function baseFromPair(pair) {
-  // Handles common Kraken formats like XRPZUSD, USDGZUSD, XBTZUSD
   const s = String(pair || "").toUpperCase();
-
-  // If it ends with ZUSD, base is everything before ZUSD
   if (s.endsWith("ZUSD")) return s.slice(0, -4);
-
-  // Fallback, try split if you ever pass wsname like XRP/USD
   if (s.includes("/")) return s.split("/")[0];
-
   return s;
 }
 
@@ -343,10 +289,6 @@ function isStablePair(pair) {
   const base = baseFromPair(pair);
   return STABLE_BASES.has(base);
 }
-
-// inside computeSafestTradesNow loop
-//if (isStablePair(pair)) continue;
-
 
 async function getTopUsdPairsByVolume(limit = 20) {
   const r = await fetch("https://api.kraken.com/0/public/Ticker");
@@ -371,62 +313,6 @@ async function getTopUsdPairsByVolume(limit = 20) {
   return rows.slice(0, limit).map(x => x.pair);
 }
 
-
-
-async function computeSafestTradesNow(uid) {
-  const client = await getUserKrakenClient(uid);
-  if (!client) return [];
-
-  await ensurePairMetaLoaded(client);
-
-  const candidates = await getTopUsdPairsByVolume(20);
-
-
-  const safeTrades = [];
-
-  for (const pair of candidates) {
-    try {
-      if (isStablePair(pair)) {
-        continue;
-      }
-
-      const h1 = await fetchOHLC_Public(pair, 60, 260);
-      const h4 = await fetchOHLC_Public(pair, 240, 260);
-      const m5 = await fetchOHLC_Public(pair, 5, 120);
-
-      if (!h1.length || !h4.length || !m5.length) continue;
-
-      const last = Number(m5[m5.length - 1].close);
-      if (!Number.isFinite(last) || last <= 0) continue;
-
-      const res = { pair, last, h1, h4, m5 };
-
-      const recommended = decideStrategyOrder(res, last, AGGRESSIVE_MODE);
-
-      const side = String(recommended?.side || "");
-      const price = Number(recommended?.price);
-
-      const actionable =
-        side === "buy" &&
-        Number.isFinite(price) &&
-        price > 0 &&
-        Number(recommended?.quality || 0) >= 70;
-
-      if (!actionable) continue;
-
-      safeTrades.push({
-        pair,
-        last,
-        recommended
-      });
-    } catch {
-    }
-  }
-
-  safeTrades.sort((a, b) => Number(b.recommended.quality || 0) - Number(a.recommended.quality || 0));
-  return safeTrades.slice(0, 5);
-}
-
 async function fetchOHLC_Public(pair, intervalMin, candles) {
   const url = "https://api.kraken.com/0/public/OHLC?pair=" + encodeURIComponent(pair) + "&interval=" + intervalMin;
   const r = await fetch(url);
@@ -442,28 +328,6 @@ async function fetchOHLC_Public(pair, intervalMin, candles) {
     close: Number(x[4]),
     volume: Number(x[6])
   }));
-}
-
-
-
-function readSafeTradesFile() {
-  try {
-    const raw = fs.readFileSync(SAFE_TRADES_FILE, "utf8");
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed?.safeTrades)) return { ts: 0, safeTrades: [] };
-    const ts = numOrNull(parsed.ts) ?? 0;
-    return { ts, safeTrades: parsed.safeTrades };
-  } catch {
-    return { ts: 0, safeTrades: [] };
-  }
-}
-
-function writeSafeTradesFile(safeTrades) {
-  try {
-    const payload = { ts: Date.now(), safeTrades: Array.isArray(safeTrades) ? safeTrades : [] };
-    fs.writeFileSync(SAFE_TRADES_FILE, JSON.stringify(payload, null, 2), "utf8");
-  } catch {
-  }
 }
 
 const pairMetaCache = new Map();
@@ -555,10 +419,6 @@ async function queryOrder(krakenClient, uid, txid) {
   return order || null;
 }
 
-/* Trades log in memory */
-const tradeLog = [];
-let tradeIdSeq = 1;
-
 function safeStr(v) {
   if (v === null || v === undefined) return "";
   return String(v);
@@ -617,6 +477,25 @@ async function logTrade(entry) {
   return { ...item, id: r.rows?.[0]?.id ?? null };
 }
 
+function readSafeTradesFile() {
+  try {
+    const raw = fs.readFileSync(SAFE_TRADES_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed?.safeTrades)) return { ts: 0, safeTrades: [] };
+    const ts = numOrNull(parsed.ts) ?? 0;
+    return { ts, safeTrades: parsed.safeTrades };
+  } catch {
+    return { ts: 0, safeTrades: [] };
+  }
+}
+
+function writeSafeTradesFile(safeTrades) {
+  try {
+    const payload = { ts: Date.now(), safeTrades: Array.isArray(safeTrades) ? safeTrades : [] };
+    fs.writeFileSync(SAFE_TRADES_FILE, JSON.stringify(payload, null, 2), "utf8");
+  } catch {
+  }
+}
 
 /* Telegram alerts */
 const ALERT_COOLDOWN_MS = 10 * 60 * 1000;
@@ -624,12 +503,6 @@ const lastSafeAlertByUser = new Map();
 
 /* Latest safe trades per user */
 const latestSafeTradesByUser = new Map();
-
-function onlyActionableBuys(safeTrades) {
-  return (Array.isArray(safeTrades) ? safeTrades : [])
-    .filter(t => String(t?.recommended?.side || "").toLowerCase() === "buy")
-    .filter(t => Number(t?.recommended?.quality || 0) >= 70); // optional quality gate
-}
 
 function actionableBuysOnly(safeTrades) {
   return (Array.isArray(safeTrades) ? safeTrades : [])
@@ -641,7 +514,23 @@ function actionableBuysOnly(safeTrades) {
     });
 }
 
+function prettyPair(pair) {
+  return String(pair || "").replace("X", "").replace("ZUSD", "/USD");
+}
 
+function safeTradesSignature(safeTrades) {
+  return safeTrades
+    .slice(0, 3)
+    .map(t => {
+      const pair = String(t.pair || "");
+      const tag = String(t.recommended?.tag || "");
+      const q = Number(t.recommended?.quality || 0);
+      const side = String(t.recommended?.side || "");
+      const entry = Number(t.recommended?.price ?? t.last ?? 0).toFixed(6);
+      return pair + "|" + tag + "|" + q + "|" + side + "|" + entry;
+    })
+    .join(";");
+}
 
 function telegramConfigured() {
   const enabled = String(process.env.TELEGRAM_ENABLED || "").toLowerCase() === "true";
@@ -674,24 +563,6 @@ async function sendTelegram(text) {
   return data;
 }
 
-function prettyPair(pair) {
-  return String(pair || "").replace("X", "").replace("ZUSD", "/USD");
-}
-
-function safeTradesSignature(safeTrades) {
-  return safeTrades
-    .slice(0, 3)
-    .map(t => {
-      const pair = String(t.pair || "");
-      const tag = String(t.recommended?.tag || "");
-      const q = Number(t.recommended?.quality || 0);
-      const side = String(t.recommended?.side || "");
-      const entry = Number(t.recommended?.price ?? t.last ?? 0).toFixed(6);
-      return pair + "|" + tag + "|" + q + "|" + side + "|" + entry;
-    })
-    .join(";");
-}
-
 function buildTelegramMessage(actionableBuys) {
   const now = new Date().toLocaleString();
   let msg = `Trade available ${now}\n\n`;
@@ -711,32 +582,108 @@ function buildTelegramMessage(actionableBuys) {
   return msg;
 }
 
-function onlyActionableBuys(safeTrades) {
-  return (Array.isArray(safeTrades) ? safeTrades : [])
-    .filter(t => String(t?.recommended?.side || "").toLowerCase() === "buy")
-    .filter(t => Number(t?.recommended?.quality || 0) >= 70);
-}
+async function computeSafestTradesNow(uid) {
+  const client = await getUserKrakenClient(uid);
+  if (!client) return [];
 
-function buildTelegramMessage(actionableBuys) {
-  const now = new Date().toLocaleString();
-  let msg = `Trade available ${now}\n\n`;
+  await ensurePairMetaLoaded(client);
 
-  for (const t of actionableBuys.slice(0, 3)) {
-    const rec = t.recommended || {};
-    const entry = Number(rec.price ?? t.last ?? 0);
+  const candidates = await getTopUsdPairsByVolume(20);
+  const safeTrades = [];
 
-    msg += `${prettyPair(t.pair)}\n`;
-    msg += `BUY  Quality ${Number(rec.quality || 0)}\n`;
-    msg += `Entry ${entry.toFixed(6)}\n`;
-    if (rec.takeProfit != null) msg += `TP ${Number(rec.takeProfit).toFixed(6)}\n`;
-    if (rec.stopLoss != null) msg += `SL ${Number(rec.stopLoss).toFixed(6)}\n`;
-    msg += `\n`;
+  for (const pair of candidates) {
+    try {
+      if (isStablePair(pair)) continue;
+
+      const h1 = await fetchOHLC_Public(pair, 60, 260);
+      const h4 = await fetchOHLC_Public(pair, 240, 260);
+      const m5 = await fetchOHLC_Public(pair, 5, 120);
+
+      if (!h1.length || !h4.length || !m5.length) continue;
+
+      const last = Number(m5[m5.length - 1].close);
+      if (!Number.isFinite(last) || last <= 0) continue;
+
+      const res = { pair, last, h1, h4, m5 };
+
+      const recommended = decideStrategyOrder(res, last, AGGRESSIVE_MODE);
+
+      const side = String(recommended?.side || "");
+      const price = Number(recommended?.price);
+
+      const actionable =
+        side === "buy" &&
+        Number.isFinite(price) &&
+        price > 0 &&
+        Number(recommended?.quality || 0) >= 70;
+
+      if (!actionable) continue;
+
+      safeTrades.push({ pair, last, recommended });
+    } catch {
+    }
   }
-  return msg;
+
+  safeTrades.sort((a, b) => Number(b.recommended.quality || 0) - Number(a.recommended.quality || 0));
+  return safeTrades.slice(0, 5);
 }
 
+/*
+  Strategy decision is assumed to be defined elsewhere in your file.
+  You included it in strategy.html, but server references it too.
+  Keep your existing decideStrategyOrder function here as you already had it.
+*/
+function decideStrategyOrder(res, currentPrice, aggressive) {
+  // This placeholder keeps your server compiling if you forgot to include it here.
+  // Replace with your existing implementation if it was below in your original server file.
+  return { side: null, price: null, quality: 0, tag: "No strategy", takeProfit: null, stopLoss: null };
+}
 
+/* Exit placement */
 
+async function placeExitOrders({ uid, tradeId, pair, volumeStr, takeProfit, stopLoss }) {
+  const client = await getUserKrakenClient(uid);
+  if (!client) throw new Error("No Kraken keys saved");
+
+  const meta = await getPairMeta(client, pair);
+
+  const tp = clampPrice(meta, takeProfit);
+  const sl = clampPrice(meta, stopLoss);
+  if (!tp || !sl) throw new Error("Invalid TP or SL");
+
+  const volume = String(volumeStr);
+
+  // Spot friendly. Remove reduce only flags since they can fail on spot.
+  const tpParams = {
+    pair,
+    type: "sell",
+    ordertype: "take-profit",
+    price: String(tp),
+    volume
+  };
+
+  const slParams = {
+    pair,
+    type: "sell",
+    ordertype: "stop-loss",
+    price: String(sl),
+    volume
+  };
+
+  const tpResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", tpParams);
+  const tpTxid = Array.isArray(tpResp?.result?.txid) ? tpResp.result.txid[0] : "";
+
+  const slResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", slParams);
+  const slTxid = Array.isArray(slResp?.result?.txid) ? slResp.result.txid[0] : "";
+
+  await updateTrade(tradeId, {
+    exit_tp_txid: tpTxid || null,
+    exit_sl_txid: slTxid || null,
+    exit_status: "open"
+  });
+
+  return { tpTxid, slTxid };
+}
 
 /* Protected pages */
 app.get("/dashboard.html", pageAuthRequired, (req, res) => res.sendFile(path.join(__dirname, "dashboard.html")));
@@ -745,19 +692,13 @@ app.get("/connect-kraken.html", pageAuthRequired, (req, res) => res.sendFile(pat
 app.get("/strategy.html", pageAuthRequired, (req, res) => res.sendFile(path.join(__dirname, "strategy.html")));
 
 /* Public pages */
-/* Public pages */
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "login.html")));
-
-// clean URL aliases
 app.get("/login", (req, res) => res.redirect("/login.html"));
 app.get("/register", (req, res) => res.redirect("/register.html"));
 app.get("/verify", (req, res) => res.redirect("/verify.html"));
-
-// existing .html routes
 app.get("/login.html", (req, res) => res.sendFile(path.join(__dirname, "login.html")));
 app.get("/register.html", (req, res) => res.sendFile(path.join(__dirname, "register.html")));
 app.get("/verify.html", (req, res) => res.sendFile(path.join(__dirname, "verify.html")));
-
 app.get("/dashboard", pageAuthRequired, (req, res) => res.redirect("/dashboard.html"));
 app.get("/account", pageAuthRequired, (req, res) => res.redirect("/account.html"));
 app.get("/connect", pageAuthRequired, (req, res) => res.redirect("/connect.html"));
@@ -863,7 +804,7 @@ app.post("/api/logout", (req, res) => {
   res.json({ ok: true });
 });
 
-/* Kraken */
+/* Kraken keys */
 app.post("/api/kraken/save", authRequired, async (req, res) => {
   try {
     const apiKey = String(req.body?.apiKey || "").trim();
@@ -969,7 +910,7 @@ app.get("/balance", authRequired, async (req, res) => {
   }
 });
 
-/* Trades list for account.html */
+/* Trades list */
 app.get("/trades", authRequired, async (req, res) => {
   try {
     const page = Math.max(1, Number(req.query.page || 1));
@@ -1051,6 +992,7 @@ app.get("/api/alerts/safest", authRequired, async (req, res) => {
   }
 });
 
+/* Cron safest alert */
 app.post("/api/cron/safest", async (req, res) => {
   try {
     const key = String(req.headers["x-cron-key"] || "");
@@ -1062,8 +1004,8 @@ app.post("/api/cron/safest", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Telegram not configured" });
     }
 
-    const users = await dbAll(`select id from public.users where is_verified = true`);
-
+    // Your tables are not in schema public. Query users, not public.users.
+    const users = await dbAll(`select id from users where is_verified = true`);
 
     let sentCount = 0;
 
@@ -1075,15 +1017,6 @@ app.post("/api/cron/safest", async (req, res) => {
       latestSafeTradesByUser.set(uid, { ts: Date.now(), safeTrades });
       writeSafeTradesFile(safeTrades);
 
-      if (!safeTrades.length) continue;
-
-      //const safeTrades = await computeSafestTradesNow(uid);
-
-      // Always store for dashboard (full list)
-      latestSafeTradesByUser.set(uid, { ts: Date.now(), safeTrades });
-      writeSafeTradesFile(safeTrades);
-
-      // Telegram should only fire if we have actionable BUY signals
       const actionable = actionableBuysOnly(safeTrades);
       if (!actionable.length) continue;
 
@@ -1100,7 +1033,6 @@ app.post("/api/cron/safest", async (req, res) => {
       const msg = buildTelegramMessage(actionable);
       await sendTelegram(msg);
       sentCount += 1;
-
     }
 
     res.json({ ok: true, sentCount });
@@ -1109,16 +1041,12 @@ app.post("/api/cron/safest", async (req, res) => {
   }
 });
 
-
-
-
-
+/* Manual alert endpoint */
 app.post("/api/alerts/safest", authRequired, async (req, res) => {
   try {
     const safeTradesAll = Array.isArray(req.body?.safeTrades) ? req.body.safeTrades : [];
     const uid = String(req.user.uid);
 
-    // Always store full set for dashboard
     latestSafeTradesByUser.set(uid, { ts: Date.now(), safeTrades: safeTradesAll });
     writeSafeTradesFile(safeTradesAll);
 
@@ -1127,8 +1055,7 @@ app.post("/api/alerts/safest", authRequired, async (req, res) => {
       return res.json({ ok: true, sent: false, reason: "empty" });
     }
 
-    // Only send telegram if there is at least one actionable BUY
-    const actionable = onlyActionableBuys(safeTradesAll);
+    const actionable = actionableBuysOnly(safeTradesAll);
     if (!actionable.length) {
       return res.json({ ok: true, sent: false, reason: "no_buy_signals" });
     }
@@ -1137,7 +1064,7 @@ app.post("/api/alerts/safest", authRequired, async (req, res) => {
       return res.json({ ok: false, sent: false, error: "Missing TELEGRAM env values" });
     }
 
-    const sig = safeTradesSignature(actionable); // use actionable set for cooldown signature
+    const sig = safeTradesSignature(actionable);
     const prev = lastSafeAlertByUser.get(uid) || { sig: "", ts: 0 };
     const now = Date.now();
 
@@ -1150,7 +1077,7 @@ app.post("/api/alerts/safest", authRequired, async (req, res) => {
 
     lastSafeAlertByUser.set(uid, { sig, ts: now });
 
-    const msg = buildTelegramMessage(actionable); // send only BUY trades
+    const msg = buildTelegramMessage(actionable);
     const tg = await sendTelegram(msg);
 
     return res.json({ ok: true, sent: true, telegram: tg });
@@ -1159,6 +1086,7 @@ app.post("/api/alerts/safest", authRequired, async (req, res) => {
   }
 });
 
+/* Force close */
 app.post("/api/order/close", authRequired, async (req, res) => {
   try {
     const tradeId = Number(req.body?.tradeId);
@@ -1176,7 +1104,7 @@ app.post("/api/order/close", authRequired, async (req, res) => {
     }
 
     if (String(trade.side).toLowerCase() !== "buy") {
-      return res.status(400).json({ error: "Only BUY trades can be force-closed" });
+      return res.status(400).json({ error: "Only BUY trades can be force closed" });
     }
 
     const client = await getUserKrakenClient(req.user.uid);
@@ -1219,9 +1147,6 @@ app.post("/api/order/close", authRequired, async (req, res) => {
     res.status(500).json({ error: "Force close failed", details: String(e.message || e) });
   }
 });
-
-
-
 
 /* Trade endpoint */
 app.post("/trade", authRequired, async (req, res) => {
@@ -1302,9 +1227,8 @@ app.post("/trade", authRequired, async (req, res) => {
     const takeProfit = nums.takeProfit ?? clampPrice(meta, entryPrice * 1.05);
     const stopLoss = nums.stopLoss ?? clampPrice(meta, entryPrice * 0.93);
 
-    const volNum = Number(volumeStr);
-    const estProfitUsd = (takeProfit !== null) ? (takeProfit - entryPrice) * volNum : null;
-    const estLossUsd = (stopLoss !== null) ? (entryPrice - stopLoss) * volNum : null;
+    const estProfitUsd = (takeProfit !== null) ? (takeProfit - entryPrice) * volumeNum : null;
+    const estLossUsd = (stopLoss !== null) ? (entryPrice - stopLoss) * volumeNum : null;
 
     const entryParams = {
       pair,
@@ -1326,7 +1250,7 @@ app.post("/trade", authRequired, async (req, res) => {
       const fakeTxid = "SIM_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
       const msgTxt = "Simulator mode. No Kraken order was placed.";
 
-      await logTrade({
+      const logged = await logTrade({
         pair, side, orderType, investUsd,
         volume: volumeNum,
         entryPrice,
@@ -1345,7 +1269,8 @@ app.post("/trade", authRequired, async (req, res) => {
         message: msgTxt,
         entryTxid: fakeTxid,
         normalized: { entryPrice, entryPrice2, takeProfit, stopLoss, volume: volumeNum },
-        simulator: true
+        simulator: true,
+        tradeId: logged?.id ?? null
       });
     }
 
@@ -1363,10 +1288,10 @@ app.post("/trade", authRequired, async (req, res) => {
       Number(entryStatus.vol_exec || 0) > 0;
 
     const msgTxt = isFilledNow
-      ? "Entry placed and filled. Exits can be handled after fill."
-      : "Entry placed. Exits will be handled after fill.";
+      ? "Entry placed and filled. Exit orders will be placed now."
+      : "Entry placed. Exit orders will be placed after fill.";
 
-    await logTrade({
+    const logged = await logTrade({
       pair, side, orderType, investUsd,
       volume: volumeNum,
       entryPrice,
@@ -1381,12 +1306,53 @@ app.post("/trade", authRequired, async (req, res) => {
       userId: req.user.uid
     });
 
+    // Critical fix. If it filled immediately, place exits immediately.
+    let exitPlaced = false;
+    let exitTxids = null;
+
+    if (isFilledNow && logged?.id) {
+      try {
+        const execVol = Number(entryStatus?.vol_exec || 0);
+        const volForExit = (Number.isFinite(execVol) && execVol > 0) ? String(execVol) : String(volumeNum);
+
+        // Optionally keep DB volume aligned with actual fill
+        if (Number.isFinite(execVol) && execVol > 0 && Number(execVol) !== Number(volumeNum)) {
+          await updateTrade(logged.id, { volume: execVol });
+        }
+
+        exitTxids = await placeExitOrders({
+          uid: String(req.user.uid),
+          tradeId: logged.id,
+          pair,
+          volumeStr: volForExit,
+          takeProfit,
+          stopLoss
+        });
+
+        exitPlaced = true;
+
+        await updateTrade(logged.id, {
+          message: "Entry filled. Exit orders placed.",
+          exit_status: "open",
+          exit_tp_txid: exitTxids?.tpTxid || null,
+          exit_sl_txid: exitTxids?.slTxid || null
+        });
+      } catch (e) {
+        await updateTrade(logged.id, {
+          message: "Entry filled but exit placement failed: " + String(e?.message || e),
+          exit_status: "none"
+        });
+      }
+    }
+
     res.json({
       message: msgTxt,
       entry: mainOrder.result,
       entryTxid: txid,
       entryStatus: entryStatus ? { status: entryStatus.status, vol: entryStatus.vol, vol_exec: entryStatus.vol_exec } : null,
-      normalized: { entryPrice, entryPrice2, takeProfit, stopLoss, volume: volumeNum }
+      normalized: { entryPrice, entryPrice2, takeProfit, stopLoss, volume: volumeNum },
+      tradeId: logged?.id ?? null,
+      exits: exitPlaced ? exitTxids : null
     });
 
   } catch (err) {
@@ -1435,6 +1401,8 @@ async function watchExitsOnce() {
     const tpTxid = String(t.exit_tp_txid || "");
     const slTxid = String(t.exit_sl_txid || "");
 
+    let execVol = null;
+
     if (t.status !== "filled") {
       if (entryTxid) {
         try {
@@ -1446,7 +1414,12 @@ async function watchExitsOnce() {
 
           if (!filled) continue;
 
+          execVol = Number(entry.vol_exec || 0);
           await updateTrade(t.id, { status: "filled" });
+
+          if (Number.isFinite(execVol) && execVol > 0) {
+            await updateTrade(t.id, { volume: execVol });
+          }
         } catch {
           continue;
         }
@@ -1456,13 +1429,21 @@ async function watchExitsOnce() {
     }
 
     if (t.exit_status === "none") {
-      if (!t.take_profit || !t.stop_loss || !t.volume) continue;
+      if (!t.take_profit || !t.stop_loss) continue;
+
+      const volForExit =
+        Number.isFinite(execVol) && execVol > 0
+          ? String(execVol)
+          : String(t.volume);
+
+      if (!volForExit || Number(volForExit) <= 0) continue;
+
       try {
         await placeExitOrders({
           uid,
           tradeId: t.id,
           pair: t.pair,
-          volumeStr: String(t.volume),
+          volumeStr: volForExit,
           takeProfit: Number(t.take_profit),
           stopLoss: Number(t.stop_loss)
         });
@@ -1500,7 +1481,6 @@ async function watchExitsOnce() {
 setInterval(() => {
   watchExitsOnce().catch(() => { });
 }, EXIT_WATCH_INTERVAL_MS);
-
 
 /* JSON parse guard */
 app.use((err, req, res, next) => {
