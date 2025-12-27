@@ -391,6 +391,13 @@ function clampPrice(meta, p) {
   return v === null ? null : v;
 }
 
+function capStopLossForBuy(meta, entryPrice, stopLoss) {
+  if (!entryPrice || !stopLoss) return stopLoss;
+  const maxLossStop = clampPrice(meta, entryPrice * 0.95);
+  if (maxLossStop === null) return stopLoss;
+  return stopLoss < maxLossStop ? maxLossStop : stopLoss;
+}
+
 function validateMinimums(meta, price, volumeStr) {
   const vol = numOrNull(volumeStr);
   if (price === null || vol === null) {
@@ -1206,7 +1213,7 @@ app.post("/trade", authRequired, async (req, res) => {
         pair, side, orderType, investUsd, volume: volumeNum,
         entryPrice: nums.price,
         takeProfit: nums.takeProfit ?? clampPrice(meta, nums.price * 1.05),
-        stopLoss: nums.stopLoss ?? clampPrice(meta, nums.price * 0.93),
+        stopLoss: nums.stopLoss ?? clampPrice(meta, nums.price * 0.95),
         status: "rejected",
         message: "Minimum not met. " + hint,
         userId: req.user.uid
@@ -1225,7 +1232,10 @@ app.post("/trade", authRequired, async (req, res) => {
     const entryPrice2 = nums.price2;
 
     const takeProfit = nums.takeProfit ?? clampPrice(meta, entryPrice * 1.05);
-    const stopLoss = nums.stopLoss ?? clampPrice(meta, entryPrice * 0.93);
+    let stopLoss = nums.stopLoss ?? clampPrice(meta, entryPrice * 0.95);
+    if (String(side).toLowerCase() === "buy") {
+      stopLoss = capStopLossForBuy(meta, entryPrice, stopLoss);
+    }
 
     const estProfitUsd = (takeProfit !== null) ? (takeProfit - entryPrice) * volumeNum : null;
     const estLossUsd = (stopLoss !== null) ? (entryPrice - stopLoss) * volumeNum : null;
@@ -1386,7 +1396,7 @@ async function cancelOrder(client, uid, txid) {
 
 async function watchExitsOnce() {
   const rows = await dbAll(
-    `select id, user_id, pair, volume, take_profit, stop_loss, txid, exit_tp_txid, exit_sl_txid, exit_status, status
+    `select id, user_id, pair, volume, entry_price, side, take_profit, stop_loss, txid, exit_tp_txid, exit_sl_txid, exit_status, status
      from public.trades
      where status in ('filled','submitted') and exit_status in ('open','none')`
   );
@@ -1439,13 +1449,23 @@ async function watchExitsOnce() {
       if (!volForExit || Number(volForExit) <= 0) continue;
 
       try {
+        let stopLoss = Number(t.stop_loss);
+        if (String(t.side || "").toLowerCase() === "buy") {
+          const entryPrice = Number(t.entry_price);
+          const cappedStopLoss = capStopLossForBuy(await getPairMeta(client, t.pair), entryPrice, stopLoss);
+          if (Number.isFinite(cappedStopLoss) && cappedStopLoss !== stopLoss) {
+            stopLoss = cappedStopLoss;
+            await updateTrade(t.id, { stop_loss: stopLoss });
+          }
+        }
+
         await placeExitOrders({
           uid,
           tradeId: t.id,
           pair: t.pair,
           volumeStr: volForExit,
           takeProfit: Number(t.take_profit),
-          stopLoss: Number(t.stop_loss)
+          stopLoss
         });
       } catch {
         continue;
