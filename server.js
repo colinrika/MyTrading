@@ -1009,7 +1009,9 @@ app.get("/api/alerts/safest", authRequired, async (req, res) => {
 /* Cron safest alert */
 app.post("/api/cron/safest", async (req, res) => {
   try {
-    const key = String(req.headers["x-cron-key"] || "");
+    const headerKey = String(req.headers["x-cron-key"] || "");
+    const queryKey = String(req.query?.cron_key || "");
+    const key = headerKey || queryKey;
     if (!process.env.CRON_KEY || key !== process.env.CRON_KEY) {
       return res.status(401).json({ ok: false, error: "Unauthorized" });
     }
