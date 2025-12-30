@@ -55,6 +55,13 @@ const pool = new Pool({
 });
 
 const SAFE_TRADES_FILE = process.env.SAFE_TRADES_FILE || "./latest_safe_trades.json";
+const QUICK_PROFIT_PCT = 0.02;
+const KRAKEN_FEE_PCT = Number(process.env.KRAKEN_FEE_PCT || 0.0026);
+
+function targetMovePct() {
+  const feePct = Number.isFinite(KRAKEN_FEE_PCT) ? KRAKEN_FEE_PCT : 0;
+  return QUICK_PROFIT_PCT + Math.max(0, feePct);
+}
 
 async function dbRun(sql, params = []) {
   return pool.query(sql, params);
@@ -1002,7 +1009,9 @@ app.get("/api/alerts/safest", authRequired, async (req, res) => {
 /* Cron safest alert */
 app.post("/api/cron/safest", async (req, res) => {
   try {
-    const key = String(req.headers["x-cron-key"] || "");
+    const headerKey = String(req.headers["x-cron-key"] || "");
+    const queryKey = String(req.query?.cron_key || "");
+    const key = headerKey || queryKey;
     if (!process.env.CRON_KEY || key !== process.env.CRON_KEY) {
       return res.status(401).json({ ok: false, error: "Unauthorized" });
     }
@@ -1231,8 +1240,9 @@ app.post("/trade", authRequired, async (req, res) => {
     const entryPrice = nums.price;
     const entryPrice2 = nums.price2;
 
-    const takeProfit = nums.takeProfit ?? clampPrice(meta, entryPrice * 1.05);
-    let stopLoss = nums.stopLoss ?? clampPrice(meta, entryPrice * 0.95);
+    const movePct = targetMovePct();
+    const takeProfit = nums.takeProfit ?? clampPrice(meta, entryPrice * (1 + movePct));
+    let stopLoss = nums.stopLoss ?? clampPrice(meta, entryPrice * (1 - movePct));
     if (String(side).toLowerCase() === "buy") {
       stopLoss = capStopLossForBuy(meta, entryPrice, stopLoss);
     }
