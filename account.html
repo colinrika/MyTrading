@@ -78,6 +78,7 @@
             <th>TP</th>
             <th>SL</th>
             <th>Current Price</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody id="tradeBody"></tbody>
@@ -129,6 +130,39 @@
       if (!Number.isFinite(x)) return "";
       const d = Number.isFinite(dp) ? dp : 6;
       return x.toFixed(d);
+    }
+
+    async function postJson(url, payload) {
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        credentials: "include"
+      });
+
+      const t = await r.text();
+      let d = {};
+      try { d = JSON.parse(t); } catch { d = { raw: t }; }
+
+      if (!r.ok) {
+        if (r.status === 401) {
+          redirectToLoginOnce();
+          throw new Error("Unauthorized");
+        }
+        throw new Error(d?.details || d?.error || ("Request failed " + r.status));
+      }
+      return d;
+    }
+
+    function canCancel(status) {
+      const s = String(status || "").toLowerCase();
+      return s.includes("open") || s.includes("pending") || s.includes("submitted") || s.includes("partial");
+    }
+
+    function canClose(status) {
+      const s = String(status || "").toLowerCase();
+      if (s.includes("closed") || s.includes("canceled") || s.includes("cancelled") || s.includes("rejected")) return false;
+      return true;
     }
 
     async function refreshBalance() {
@@ -194,12 +228,13 @@
         data = await getJson(apiUrl("/trades?page=" + page + "&pageSize=" + LIMIT + "&q=" + encodeURIComponent(query)));
       } catch (e) {
         const tr = document.createElement("tr");
-        tr.innerHTML = "<td colspan='9' class='bad'>" + String(e.message) + "</td>";
+        tr.innerHTML = "<td colspan='10' class='bad'>" + String(e.message) + "</td>";
         body.appendChild(tr);
         return;
       }
 
-      const items = data.items || [];
+      const rawItems = data.items || [];
+      const items = rawItems.filter((t) => canClose(t.status));
       const priceMap = await fetchCurrentPrices(items.map((t) => String(t.pair || "")));
 
       for (const t of items) {
@@ -208,6 +243,56 @@
         const pair = String(t.pair || "");
         const currentPrice = Number(priceMap[pair]);
         const priceClass = Number.isFinite(currentPrice) ? "priceHighlight" : "muted";
+
+        const actionWrap = document.createElement("div");
+        actionWrap.className = "actions";
+
+        const cancelBtn = document.createElement("button");
+        cancelBtn.textContent = "Cancel";
+        cancelBtn.className = "danger";
+        cancelBtn.disabled = !String(t.txid || "") || !canCancel(t.status);
+
+        cancelBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const txid = String(t.txid || "");
+          if (!txid) return;
+          const ok = confirm("Cancel this order " + txid + " ?");
+          if (!ok) return;
+
+          cancelBtn.disabled = true;
+          try {
+            const r = await postJson(apiUrl("/api/order/cancel"), { txid });
+            alert(r && r.canceled ? "Canceled" : "Cancel request sent");
+            await refreshTrades();
+          } catch (err) {
+            alert(String(err.message || err));
+            cancelBtn.disabled = false;
+          }
+        });
+
+        const closeBtn = document.createElement("button");
+        closeBtn.textContent = "Sell now";
+        closeBtn.className = "primary";
+        closeBtn.disabled = !canClose(t.status);
+
+        closeBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const ok = confirm("Close this trade now using a market order?");
+          if (!ok) return;
+
+          closeBtn.disabled = true;
+          try {
+            const r = await postJson(apiUrl("/api/order/close"), { tradeId: Number(t.id) });
+            alert(r && r.closed ? "Close sent" : "Close requested");
+            await refreshTrades();
+          } catch (err) {
+            alert(String(err.message || err));
+            closeBtn.disabled = false;
+          }
+        });
+
+        actionWrap.appendChild(cancelBtn);
+        actionWrap.appendChild(closeBtn);
 
         tr.innerHTML =
           "<td>" + (t.time ? new Date(t.time).toLocaleString() : (t.createdAt ? new Date(t.createdAt).toLocaleString() : "")) + "</td>" +
@@ -218,7 +303,10 @@
           "<td>" + fmt(t.volume, 6) + "</td>" +
           "<td>" + fmt(t.takeProfit ?? t.tp, 6) + "</td>" +
           "<td>" + fmt(t.stopLoss ?? t.sl, 6) + "</td>" +
-          "<td class='" + priceClass + "'>" + (Number.isFinite(currentPrice) ? currentPrice.toFixed(6) : "") + "</td>";
+          "<td class='" + priceClass + "'>" + (Number.isFinite(currentPrice) ? currentPrice.toFixed(6) : "") + "</td>" +
+          "<td></td>";
+
+        tr.children[9].appendChild(actionWrap);
 
         body.appendChild(tr);
       }
