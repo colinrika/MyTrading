@@ -353,6 +353,8 @@ async function ensurePairMetaLoaded(krakenClient) {
     const info = result[key] || {};
     pairMetaCache.set(key, {
       wsname: info.wsname || "",
+      base: info.base || "",
+      quote: info.quote || "",
       pair_decimals: numOrNull(info.pair_decimals) ?? 5,
       lot_decimals: numOrNull(info.lot_decimals) ?? 8,
       ordermin: numOrNull(info.ordermin),
@@ -373,7 +375,22 @@ async function getPairMeta(krakenClient, pair) {
     if (v.wsname && v.wsname === pair) return v;
   }
 
-  return { wsname: "", pair_decimals: 5, lot_decimals: 8, ordermin: null, costmin: null };
+  return { wsname: "", base: "", quote: "", pair_decimals: 5, lot_decimals: 8, ordermin: null, costmin: null };
+}
+
+function findBalanceForAsset(balance, assetCode) {
+  const b = balance || {};
+  const keys = Object.keys(b);
+  if (!assetCode) return { asset: "", amount: null };
+
+  const directKey = keys.find((k) => k.toUpperCase() === assetCode.toUpperCase());
+  if (directKey) return { asset: directKey, amount: numOrNull(b[directKey]) };
+
+  const normalizedCode = assetCode.replace(/^X|^Z/, "").toUpperCase();
+  const prefixedKey = keys.find((k) => k.replace(/^X|^Z/, "").toUpperCase() === normalizedCode);
+  if (prefixedKey) return { asset: prefixedKey, amount: numOrNull(b[prefixedKey]) };
+
+  return { asset: "", amount: null };
 }
 
 function formatOrderNumbers(meta, payload) {
@@ -1128,9 +1145,26 @@ app.post("/api/order/close", authRequired, async (req, res) => {
       return res.status(400).json({ error: "No Kraken keys saved" });
     }
 
+    const meta = await getPairMeta(client, trade.pair);
+    const balanceResp = await krakenApiWithNonceRetry(client, req.user.uid, "Balance");
+    const balance = balanceResp?.result || {};
+    const balanceInfo = findBalanceForAsset(balance, meta.base);
+    const available = balanceInfo.amount;
+
     const volume = Number(trade.volume);
     if (!Number.isFinite(volume) || volume <= 0) {
       return res.status(400).json({ error: "Invalid trade volume" });
+    }
+
+    if (!Number.isFinite(available) || available <= 0) {
+      return res.status(400).json({ error: "No balance available to sell for this pair" });
+    }
+
+    if (available < volume) {
+      return res.status(400).json({
+        error: "Insufficient balance to sell",
+        details: `Available ${available} ${balanceInfo.asset || meta.base} is below trade volume ${volume}`
+      });
     }
 
     const sellParams = {
