@@ -1140,9 +1140,38 @@ app.post("/api/order/close", authRequired, async (req, res) => {
       return res.status(400).json({ error: "Only BUY trades can be force closed" });
     }
 
+    if (String(trade.status || "").toLowerCase() === "closed") {
+      return res.json({ ok: true, closed: true, alreadyClosed: true });
+    }
+
     const client = await getUserKrakenClient(req.user.uid);
     if (!client) {
       return res.status(400).json({ error: "No Kraken keys saved" });
+    }
+
+    const exitTxids = [trade.exit_tp_txid, trade.exit_sl_txid]
+      .map((txid) => String(txid || "").trim())
+      .filter(Boolean);
+
+    for (const txid of exitTxids) {
+      try {
+        const exitOrder = await queryOrder(client, req.user.uid, txid);
+        const filled =
+          exitOrder &&
+          String(exitOrder.status || "").toLowerCase() === "closed" &&
+          Number(exitOrder.vol_exec || 0) > 0;
+
+        if (filled) {
+          await dbRun(
+            `update public.trades
+             set status = 'closed', message = 'Exit already filled'
+             where id = $1`,
+            [tradeId]
+          );
+          return res.json({ ok: true, closed: true, alreadyClosed: true, txid });
+        }
+      } catch {
+      }
     }
 
     const meta = await getPairMeta(client, trade.pair);
