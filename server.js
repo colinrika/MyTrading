@@ -886,6 +886,39 @@ app.get("/api/account/status", authRequired, async (req, res) => {
   }
 });
 
+app.get("/api/orders/open", authRequired, async (req, res) => {
+  try {
+    const pair = String(req.query.pair || "").trim();
+    const tradeId = Number(req.query.tradeId || 0);
+    if (!pair) return res.status(400).json({ error: "pair is required" });
+
+    const client = await getUserKrakenClient(req.user.uid);
+    if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
+
+    const meta = await getPairMeta(client, pair);
+    const normalizedPair = String(pair).replace("/", "");
+    const wsPair = String(meta.wsname || "").replace("/", "");
+    const resp = await krakenApiWithNonceRetry(client, req.user.uid, "OpenOrders");
+    const openOrders = resp?.result?.open || {};
+    const orders = Object.values(openOrders).filter((o) => {
+      const descrPair = String(o?.descr?.pair || "").replace("/", "");
+      return descrPair === normalizedPair || (wsPair && descrPair === wsPair);
+    });
+
+    if (!orders.length && tradeId) {
+      await dbRun(
+        `delete from public.trades where id = $1 and user_id = $2`,
+        [tradeId, req.user.uid]
+      );
+      return res.json({ ok: true, orders: [], deleted: true });
+    }
+
+    res.json({ ok: true, orders, deleted: false });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to load open orders", details: String(e.message || e) });
+  }
+});
+
 app.get("/pair-info", authRequired, async (req, res) => {
   try {
     const pair = String(req.query.pair || "");
@@ -898,6 +931,8 @@ app.get("/pair-info", authRequired, async (req, res) => {
     res.json({
       pair,
       wsname: meta.wsname,
+      base: meta.base,
+      quote: meta.quote,
       pair_decimals: meta.pair_decimals,
       lot_decimals: meta.lot_decimals,
       ordermin: meta.ordermin,
