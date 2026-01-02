@@ -22,6 +22,7 @@
     .good { color: lightgreen; }
     .bad { color: #ff5555; }
     .warn { color: #ffcc00; }
+    .priceHighlight { background: #1f6feb; color: #fff; font-weight: bold; }
 
     .tools { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
     input { border-radius: 10px; border: 1px solid #30363d; background: #0d1117; color: #e6edf3; padding: 10px 12px; width: 280px; }
@@ -76,8 +77,7 @@
             <th>Volume</th>
             <th>TP</th>
             <th>SL</th>
-            <th>Gross PnL</th>
-            <th>Net PnL</th>
+            <th>Current Price</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -92,9 +92,6 @@
         </div>
       </div>
 
-      <div class="muted" style="margin-top:10px;">
-        Net PnL is gross PnL minus fees. If your API does not send fees yet, net will match gross.
-      </div>
     </div>
   </div>
 
@@ -128,6 +125,13 @@
       return d;
     }
 
+    function fmt(n, dp) {
+      const x = Number(n);
+      if (!Number.isFinite(x)) return "";
+      const d = Number.isFinite(dp) ? dp : 6;
+      return x.toFixed(d);
+    }
+
     async function postJson(url, payload) {
       const r = await fetch(url, {
         method: "POST",
@@ -150,13 +154,6 @@
       return d;
     }
 
-    function fmt(n, dp) {
-      const x = Number(n);
-      if (!Number.isFinite(x)) return "";
-      const d = Number.isFinite(dp) ? dp : 6;
-      return x.toFixed(d);
-    }
-
     function canCancel(status) {
       const s = String(status || "").toLowerCase();
       return s.includes("open") || s.includes("pending") || s.includes("submitted") || s.includes("partial");
@@ -171,21 +168,15 @@
     async function refreshBalance() {
       try {
         const d = await getJson(apiUrl("/balance"));
-        const b = d.balance || {};
-        const keys = Object.keys(b);
-
         const wrap = document.getElementById("balanceLines");
         wrap.innerHTML = "";
 
-        keys.sort((a, b) => a === "ZUSD" ? -1 : b === "ZUSD" ? 1 : a.localeCompare(b));
-        for (const k of keys) {
-          const v = String(b[k]);
-          const row = document.createElement("div");
-          row.className = "kv";
-          const cls = k === "ZUSD" ? "good" : "muted";
-          row.innerHTML = "<span>" + k + "</span><span class='" + cls + "'>" + v + "</span>";
-          wrap.appendChild(row);
-        }
+        const b = d.balance || {};
+        const zusd = b.ZUSD ?? b.USD ?? null;
+        const row = document.createElement("div");
+        row.className = "kv";
+        row.innerHTML = "<span>ZUSD</span><span class='good'>" + (zusd !== null ? String(zusd) : "0") + "</span>";
+        wrap.appendChild(row);
 
         const avail = Number(d.availableZusd);
         if (Number.isFinite(avail)) {
@@ -203,6 +194,31 @@
       }
     }
 
+    async function fetchCurrentPrices(pairs) {
+      const uniq = Array.from(new Set(pairs.filter(Boolean)));
+      if (!uniq.length) return {};
+
+      const url = "https://api.kraken.com/0/public/Ticker?pair=" + encodeURIComponent(uniq.join(","));
+      try {
+        const r = await fetch(url);
+        const d = await r.json();
+        const result = d?.result || {};
+        const map = {};
+
+        for (const [key, val] of Object.entries(result)) {
+          const price = Number(val?.c?.[0]);
+          if (!Number.isFinite(price)) continue;
+          map[key] = price;
+          if (val?.altname) {
+            map[val.altname] = price;
+          }
+        }
+        return map;
+      } catch (e) {
+        return {};
+      }
+    }
+
     async function refreshTrades() {
       const body = document.getElementById("tradeBody");
       body.innerHTML = "";
@@ -212,25 +228,21 @@
         data = await getJson(apiUrl("/trades?page=" + page + "&pageSize=" + LIMIT + "&q=" + encodeURIComponent(query)));
       } catch (e) {
         const tr = document.createElement("tr");
-        tr.innerHTML = "<td colspan='11' class='bad'>" + String(e.message) + "</td>";
+        tr.innerHTML = "<td colspan='10' class='bad'>" + String(e.message) + "</td>";
         body.appendChild(tr);
         return;
       }
 
-      const items = data.items || [];
+      const rawItems = data.items || [];
+      const items = rawItems.filter((t) => canClose(t.status));
+      const priceMap = await fetchCurrentPrices(items.map((t) => String(t.pair || "")));
 
       for (const t of items) {
         const tr = document.createElement("tr");
 
-        const gross = Number(t.pnlUsd ?? t.grossPnlUsd ?? t.pnl ?? 0);
-        const fee = Number(t.feeUsd ?? t.feesUsd ?? 0);
-        const net = (Number.isFinite(gross) ? (gross - (Number.isFinite(fee) ? fee : 0)) : 0);
-
-        const grossCls = gross > 0 ? "good" : (gross < 0 ? "bad" : "muted");
-        const netCls = net > 0 ? "good" : (net < 0 ? "bad" : "muted");
-
-        const txid = String(t.txid || "");
-        const status = String(t.status || "");
+        const pair = String(t.pair || "");
+        const currentPrice = Number(priceMap[pair]);
+        const priceClass = Number.isFinite(currentPrice) ? "priceHighlight" : "muted";
 
         const actionWrap = document.createElement("div");
         actionWrap.className = "actions";
@@ -238,10 +250,11 @@
         const cancelBtn = document.createElement("button");
         cancelBtn.textContent = "Cancel";
         cancelBtn.className = "danger";
-        cancelBtn.disabled = !txid || !canCancel(status);
+        cancelBtn.disabled = !String(t.txid || "") || !canCancel(t.status);
 
         cancelBtn.addEventListener("click", async (e) => {
           e.stopPropagation();
+          const txid = String(t.txid || "");
           if (!txid) return;
           const ok = confirm("Cancel this order " + txid + " ?");
           if (!ok) return;
@@ -260,7 +273,7 @@
         const closeBtn = document.createElement("button");
         closeBtn.textContent = "Sell now";
         closeBtn.className = "primary";
-        closeBtn.disabled = !canClose(status);
+        closeBtn.disabled = !canClose(t.status);
 
         closeBtn.addEventListener("click", async (e) => {
           e.stopPropagation();
@@ -283,18 +296,17 @@
 
         tr.innerHTML =
           "<td>" + (t.time ? new Date(t.time).toLocaleString() : (t.createdAt ? new Date(t.createdAt).toLocaleString() : "")) + "</td>" +
-          "<td>" + String(t.pair || "") + "</td>" +
+          "<td>" + pair + "</td>" +
           "<td>" + String(t.side || "") + "</td>" +
           "<td>" + String(t.status || "") + "</td>" +
           "<td>" + fmt(t.entryPrice ?? t.entry, 6) + "</td>" +
           "<td>" + fmt(t.volume, 6) + "</td>" +
           "<td>" + fmt(t.takeProfit ?? t.tp, 6) + "</td>" +
           "<td>" + fmt(t.stopLoss ?? t.sl, 6) + "</td>" +
-          "<td class='" + grossCls + "'>" + (Number.isFinite(gross) ? gross.toFixed(4) : "") + "</td>" +
-          "<td class='" + netCls + "'>" + (Number.isFinite(net) ? net.toFixed(4) : "") + "</td>" +
+          "<td class='" + priceClass + "'>" + (Number.isFinite(currentPrice) ? currentPrice.toFixed(6) : "") + "</td>" +
           "<td></td>";
 
-        tr.children[10].appendChild(actionWrap);
+        tr.children[9].appendChild(actionWrap);
 
         body.appendChild(tr);
       }
