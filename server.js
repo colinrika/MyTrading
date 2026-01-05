@@ -1231,10 +1231,19 @@ app.post("/api/order/close", authRequired, async (req, res) => {
       return res.status(400).json({ error: "No balance available to sell for this pair" });
     }
 
-    if (available < volume) {
+    const ld = meta.lot_decimals ?? 8;
+    const availableRounded = roundToDecimals(available, ld);
+    const availableStr = availableRounded === null ? null : trimNumberString(availableRounded.toFixed(ld));
+    const volumeToSell = Number(available < volume ? availableStr : volume);
+
+    if (!Number.isFinite(volumeToSell) || volumeToSell <= 0) {
+      return res.status(400).json({ error: "No balance available to sell for this pair" });
+    }
+
+    if (meta.ordermin !== null && volumeToSell < meta.ordermin) {
       return res.status(400).json({
         error: "Insufficient balance to sell",
-        details: `Available ${available} ${balanceInfo.asset || meta.base} is below trade volume ${volume}`
+        details: `Available ${available} ${balanceInfo.asset || meta.base} is below minimum order size ${meta.ordermin}`
       });
     }
 
@@ -1242,7 +1251,7 @@ app.post("/api/order/close", authRequired, async (req, res) => {
       pair: trade.pair,
       type: "sell",
       ordertype: "market",
-      volume: volume.toString()
+      volume: volumeToSell.toString()
     };
 
     const result = await krakenApiWithNonceRetry(
@@ -1256,14 +1265,18 @@ app.post("/api/order/close", authRequired, async (req, res) => {
       ? result.result.txid[0]
       : "";
 
+    const msg = volumeToSell < volume
+      ? "Force sold available balance at market"
+      : "Force sold at market";
+
     await dbRun(
       `update public.trades
-       set status = 'closed', message = 'Force sold at market'
+       set status = 'closed', message = $2, volume = $3
        where id = $1`,
-      [tradeId]
+      [tradeId, msg, volumeToSell]
     );
 
-    res.json({ ok: true, closed: true, txid });
+    res.json({ ok: true, closed: true, txid, volumeSold: volumeToSell });
   } catch (e) {
     res.status(500).json({ error: "Force close failed", details: String(e.message || e) });
   }
