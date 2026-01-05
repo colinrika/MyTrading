@@ -685,14 +685,6 @@ async function placeExitOrders({ uid, tradeId, pair, volumeStr, takeProfit, stop
   const volume = String(volumeStr);
 
   // Spot friendly. Remove reduce only flags since they can fail on spot.
-  const tpParams = {
-    pair,
-    type: "sell",
-    ordertype: "take-profit",
-    price: String(tp),
-    volume
-  };
-
   const slParams = {
     pair,
     type: "sell",
@@ -701,11 +693,26 @@ async function placeExitOrders({ uid, tradeId, pair, volumeStr, takeProfit, stop
     volume
   };
 
-  const tpResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", tpParams);
-  const tpTxid = Array.isArray(tpResp?.result?.txid) ? tpResp.result.txid[0] : "";
+  const tpParams = {
+    pair,
+    type: "sell",
+    ordertype: "take-profit",
+    price: String(tp),
+    volume
+  };
 
   const slResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", slParams);
   const slTxid = Array.isArray(slResp?.result?.txid) ? slResp.result.txid[0] : "";
+
+  let tpTxid = "";
+  try {
+    const tpResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", tpParams);
+    tpTxid = Array.isArray(tpResp?.result?.txid) ? tpResp.result.txid[0] : "";
+  } catch (e) {
+    await updateTrade(tradeId, {
+      message: "Stop loss placed. Take profit failed: " + String(e?.message || e)
+    });
+  }
 
   await updateTrade(tradeId, {
     exit_tp_txid: tpTxid || null,
