@@ -80,11 +80,12 @@
             <th>Pair</th>
             <th>Side</th>
             <th>Status</th>
-            <th>Entry</th>
+            <th>Entry (USD)</th>
             <th>Volume</th>
-            <th>TP</th>
-            <th>SL</th>
+            <th>TP (USD)</th>
+            <th>SL (USD)</th>
             <th>Current Price</th>
+            <th>Est. P/L (TP/SL)</th>
             <th>Open Orders</th>
             <th>Actions</th>
           </tr>
@@ -151,6 +152,12 @@
       if (!Number.isFinite(x)) return "";
       const d = Number.isFinite(dp) ? dp : 6;
       return x.toFixed(d);
+    }
+
+    function fmtUsd(n) {
+      const x = Number(n);
+      if (!Number.isFinite(x)) return "";
+      return "$" + x.toFixed(2);
     }
 
     function openModal() {
@@ -459,22 +466,38 @@
           loadOpenOrders(pair, t.id);
         });
 
+        const entryPrice = Number(t.entryPrice ?? t.entry);
+        const volume = Number(t.volume);
+        const tpPrice = Number(t.takeProfit ?? t.tp);
+        const slPrice = Number(t.stopLoss ?? t.sl);
+
+        const entryUsd = Number.isFinite(entryPrice) && Number.isFinite(volume) ? entryPrice * volume : null;
+        const tpUsd = Number.isFinite(tpPrice) && Number.isFinite(volume) ? tpPrice * volume : null;
+        const slUsd = Number.isFinite(slPrice) && Number.isFinite(volume) ? slPrice * volume : null;
+
+        const estProfit = (Number.isFinite(tpUsd) && Number.isFinite(entryUsd)) ? tpUsd - entryUsd : null;
+        const estLoss = (Number.isFinite(slUsd) && Number.isFinite(entryUsd)) ? entryUsd - slUsd : null;
+        const estProfitClass = Number.isFinite(estProfit) && estProfit > 0 ? "good" : "muted";
+        const estLossClass = Number.isFinite(estLoss) && estLoss > 0 ? "bad" : "muted";
+
         tr.innerHTML =
           "<td>" + (t.time ? new Date(t.time).toLocaleString() : (t.createdAt ? new Date(t.createdAt).toLocaleString() : "")) + "</td>" +
           "<td>" + pair + "</td>" +
           "<td>" + String(t.side || "") + "</td>" +
           "<td>" + String(t.status || "") + "</td>" +
-          "<td>" + fmt(t.entryPrice ?? t.entry, 6) + "</td>" +
+          "<td>" + fmtUsd(entryUsd) + "</td>" +
           "<td>" + fmt(t.volume, 6) + "</td>" +
-          "<td>" + fmt(t.takeProfit ?? t.tp, 6) + "</td>" +
-          "<td>" + fmt(t.stopLoss ?? t.sl, 6) + "</td>" +
+          "<td>" + fmtUsd(tpUsd) + "</td>" +
+          "<td>" + fmtUsd(slUsd) + "</td>" +
           "<td class='" + priceClass + "'>" + (Number.isFinite(currentPrice) ? currentPrice.toFixed(6) : "") + "</td>" +
+          "<td><span class='" + estProfitClass + "'>" + fmtUsd(estProfit) + "</span>/" +
+          "<span class='" + estLossClass + "'>" + fmtUsd(estLoss) + "</span></td>" +
           "<td></td>" +
           "<td></td>";
 
         tr.setAttribute("data-trade-id", String(t.id || ""));
-        tr.children[9].appendChild(openOrdersBtn);
-        tr.children[10].appendChild(actionWrap);
+        tr.children[10].appendChild(openOrdersBtn);
+        tr.children[11].appendChild(actionWrap);
 
         body.appendChild(tr);
       }
