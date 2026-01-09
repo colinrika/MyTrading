@@ -450,6 +450,19 @@ async function queryOrder(krakenClient, uid, txid) {
   return order || null;
 }
 
+async function fetchOpenOrdersForPair(client, uid, pair) {
+  const meta = await getPairMeta(client, pair);
+  const normalizedPair = String(pair).replace("/", "");
+  const wsPair = String(meta.wsname || "").replace("/", "");
+  const resp = await krakenApiWithNonceRetry(client, uid, "OpenOrders");
+  const openOrders = resp?.result?.open || {};
+  const orders = Object.values(openOrders).filter((o) => {
+    const descrPair = String(o?.descr?.pair || "").replace("/", "");
+    return descrPair === normalizedPair || (wsPair && descrPair === wsPair);
+  });
+  return orders;
+}
+
 function safeStr(v) {
   if (v === null || v === undefined) return "";
   return String(v);
@@ -929,15 +942,7 @@ app.get("/api/orders/open", authRequired, async (req, res) => {
     const client = await getUserKrakenClient(req.user.uid);
     if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
 
-    const meta = await getPairMeta(client, pair);
-    const normalizedPair = String(pair).replace("/", "");
-    const wsPair = String(meta.wsname || "").replace("/", "");
-    const resp = await krakenApiWithNonceRetry(client, req.user.uid, "OpenOrders");
-    const openOrders = resp?.result?.open || {};
-    const orders = Object.values(openOrders).filter((o) => {
-      const descrPair = String(o?.descr?.pair || "").replace("/", "");
-      return descrPair === normalizedPair || (wsPair && descrPair === wsPair);
-    });
+    const orders = await fetchOpenOrdersForPair(client, req.user.uid, pair);
 
     if (!orders.length && tradeId) {
       await dbRun(
@@ -1216,6 +1221,11 @@ app.post("/api/order/close", authRequired, async (req, res) => {
     const client = await getUserKrakenClient(req.user.uid);
     if (!client) {
       return res.status(400).json({ error: "No Kraken keys saved" });
+    }
+
+    const openOrders = await fetchOpenOrdersForPair(client, req.user.uid, trade.pair);
+    if (openOrders.length) {
+      return res.status(400).json({ error: "Cancel open orders before selling", openOrders: openOrders.length });
     }
 
     const exitTxids = [trade.exit_tp_txid, trade.exit_sl_txid]

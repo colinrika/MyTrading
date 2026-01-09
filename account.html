@@ -45,6 +45,7 @@
     .modal { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 16px; width: 92%; max-width: 560px; }
     .modalHeader { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
     .modalTitle { font-size: 16px; font-weight: bold; }
+    .modalActions { display: flex; gap: 8px; align-items: center; }
   </style>
 </head>
 <body>
@@ -106,7 +107,10 @@
     <div class="modal">
       <div class="modalHeader">
         <div class="modalTitle" id="ordersModalTitle">Open Orders</div>
-        <button id="closeOrdersModal">Close</button>
+        <div class="modalActions">
+          <button id="refreshOrdersModal">Refresh</button>
+          <button id="closeOrdersModal">Close</button>
+        </div>
       </div>
       <div id="ordersModalBody" class="muted">Loading...</div>
     </div>
@@ -294,7 +298,12 @@
       }
     }
 
+    let modalPair = "";
+    let modalTradeId = null;
+
     async function loadOpenOrders(pair, tradeId) {
+      modalPair = pair;
+      modalTradeId = tradeId;
       const modalBody = document.getElementById("ordersModalBody");
       modalBody.textContent = "Loading...";
       document.getElementById("ordersModalTitle").textContent = "Open Orders - " + pair;
@@ -316,14 +325,39 @@
         }
 
         const list = items.map((o) => {
+          const txid = String(o?.txid || "");
           const side = String(o?.descr?.type || "").toUpperCase();
           const type = String(o?.descr?.ordertype || "");
           const price = o?.descr?.price ? Number(o.descr.price).toFixed(6) : "-";
           const vol = o?.vol ? Number(o.vol).toFixed(6) : "-";
-          return "<div class='kv'><span>" + side + " " + type + "</span><span>" + vol + " @ " + price + "</span></div>";
+          return (
+            "<div class='kv'>" +
+            "<span>" + side + " " + type + "</span>" +
+            "<span>" + vol + " @ " + price + "</span>" +
+            "<span><button class='danger' data-cancel-txid='" + txid + "'>Cancel</button></span>" +
+            "</div>"
+          );
         }).join("");
 
         modalBody.innerHTML = list;
+        modalBody.querySelectorAll("button[data-cancel-txid]").forEach((btn) => {
+          btn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const txid = btn.getAttribute("data-cancel-txid");
+            if (!txid) return;
+            const ok = confirm("Cancel this order " + txid + " ?");
+            if (!ok) return;
+            btn.disabled = true;
+            try {
+              const r = await postJson(apiUrl("/api/order/cancel"), { txid });
+              alert(r && r.canceled ? "Canceled" : "Cancel request sent");
+              await loadOpenOrders(pair, tradeId);
+            } catch (err) {
+              alert(String(err.message || err));
+              btn.disabled = false;
+            }
+          });
+        });
       } catch (err) {
         modalBody.innerHTML = "<div class='bad'>" + String(err.message || err) + "</div>";
       }
@@ -481,6 +515,11 @@
     setInterval(refreshTrades, 60000);
 
     document.getElementById("closeOrdersModal").addEventListener("click", closeModal);
+    document.getElementById("refreshOrdersModal").addEventListener("click", () => {
+      if (modalPair && modalTradeId) {
+        loadOpenOrders(modalPair, modalTradeId);
+      }
+    });
     document.getElementById("ordersModal").addEventListener("click", (e) => {
       if (e.target.id === "ordersModal") closeModal();
     });
