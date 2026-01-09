@@ -701,8 +701,45 @@ async function placeExitOrders({ uid, tradeId, pair, volumeStr, takeProfit, stop
     volume
   };
 
-  const slResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", slParams);
-  const slTxid = Array.isArray(slResp?.result?.txid) ? slResp.result.txid[0] : "";
+  let slResp;
+  let slTxid = "";
+  try {
+    slResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", slParams);
+    slTxid = Array.isArray(slResp?.result?.txid) ? slResp.result.txid[0] : "";
+  } catch {
+    slTxid = "";
+  }
+
+  if (!slTxid) {
+    const fallbackLimit = clampPrice(meta, sl * 0.995);
+    if (!fallbackLimit) throw new Error("Stop loss placement failed");
+
+    const slLimitParams = {
+      pair,
+      type: "sell",
+      ordertype: "stop-loss-limit",
+      price: String(sl),
+      price2: String(fallbackLimit),
+      volume
+    };
+
+    const slLimitResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", slLimitParams);
+    slTxid = Array.isArray(slLimitResp?.result?.txid) ? slLimitResp.result.txid[0] : "";
+  }
+
+  if (!slTxid) {
+    throw new Error("Stop loss placement failed");
+  }
+
+  let tpTxid = "";
+  try {
+    const tpResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", tpParams);
+    tpTxid = Array.isArray(tpResp?.result?.txid) ? tpResp.result.txid[0] : "";
+  } catch (e) {
+    await updateTrade(tradeId, {
+      message: "Stop loss placed. Take profit failed: " + String(e?.message || e)
+    });
+  }
 
   let tpTxid = "";
   try {
