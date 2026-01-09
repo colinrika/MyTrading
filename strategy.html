@@ -55,6 +55,13 @@
 
   <script>
     const RSI_PERIOD = 14;
+    const QUICK_PROFIT_PCT = 0.02;
+    const KRAKEN_FEE_PCT = 0.0026;
+
+    function targetMovePct() {
+      const feePct = Number.isFinite(KRAKEN_FEE_PCT) ? KRAKEN_FEE_PCT : 0;
+      return QUICK_PROFIT_PCT + Math.max(0, feePct);
+    }
 
     const H1_INTERVAL_MIN = 60;
     const H4_INTERVAL_MIN = 240;
@@ -371,10 +378,9 @@
         }
 
         const entry = currentPrice;
-        const swingLow = approxPullbackSwingLow(m5Closes, 12);
-        const stop = swingLow ? (swingLow * 0.999) : (entry * 0.992);
-        const r = entry - stop;
-        const tp = entry + (r * (aggressive ? 1.5 : 2.0));
+        const movePct = targetMovePct();
+        const stop = entry * (1 - movePct);
+        const tp = entry * (1 + movePct);
 
         let q = aggressive ? 75 : 85;
         if (reclaimBarsAgo === 1) q -= 8;
@@ -450,8 +456,9 @@
       const rsiForecast = Array.from({ length: M5_FORECAST_CANDLES }, (_, i) => lrR.m * (rsiHist.length + i + 1) + lrR.b);
 
       const entry = prices[prices.length - 1];
-      const tp = entry * 1.05;
-      const sl = entry * 0.93;
+      const movePct = targetMovePct();
+      const tp = entry * (1 + movePct);
+      const sl = entry * (1 - movePct);
 
       const fLabels = Array.from({ length: M5_FORECAST_CANDLES }, (_, i) => {
         const mins = (i + 1) * 5;
