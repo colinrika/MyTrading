@@ -84,7 +84,7 @@
             <th>Volume</th>
             <th>TP (USD)</th>
             <th>SL (USD)</th>
-            <th>Current Price</th>
+            <th>Current Price (USD)</th>
             <th>Est. P/L (TP/SL)</th>
             <th>Open Orders</th>
             <th>Actions</th>
@@ -480,6 +480,8 @@
         const estProfitClass = Number.isFinite(estProfit) && estProfit > 0 ? "good" : "muted";
         const estLossClass = Number.isFinite(estLoss) && estLoss > 0 ? "bad" : "muted";
 
+        const currentUsd = Number.isFinite(currentPrice) && Number.isFinite(volume) ? currentPrice * volume : null;
+
         tr.innerHTML =
           "<td>" + (t.time ? new Date(t.time).toLocaleString() : (t.createdAt ? new Date(t.createdAt).toLocaleString() : "")) + "</td>" +
           "<td>" + pair + "</td>" +
@@ -489,7 +491,7 @@
           "<td>" + fmt(t.volume, 6) + "</td>" +
           "<td>" + fmtUsd(tpUsd) + "</td>" +
           "<td>" + fmtUsd(slUsd) + "</td>" +
-          "<td class='" + priceClass + "'>" + (Number.isFinite(currentPrice) ? currentPrice.toFixed(6) : "") + "</td>" +
+          "<td class='" + priceClass + "'>" + fmtUsd(currentUsd) + "</td>" +
           "<td><span class='" + estProfitClass + "'>" + fmtUsd(estProfit) + "</span>/" +
           "<span class='" + estLossClass + "'>" + fmtUsd(estLoss) + "</span></td>" +
           "<td></td>" +
