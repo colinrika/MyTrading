@@ -731,20 +731,10 @@ async function placeExitOrders({ uid, tradeId, pair, volumeStr, takeProfit, stop
     throw new Error("Stop loss placement failed");
   }
 
-  let tpTxid = "";
+  let tpExitTxid = "";
   try {
     const tpResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", tpParams);
-    tpTxid = Array.isArray(tpResp?.result?.txid) ? tpResp.result.txid[0] : "";
-  } catch (e) {
-    await updateTrade(tradeId, {
-      message: "Stop loss placed. Take profit failed: " + String(e?.message || e)
-    });
-  }
-
-  let tpTxid = "";
-  try {
-    const tpResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", tpParams);
-    tpTxid = Array.isArray(tpResp?.result?.txid) ? tpResp.result.txid[0] : "";
+    tpExitTxid = Array.isArray(tpResp?.result?.txid) ? tpResp.result.txid[0] : "";
   } catch (e) {
     await updateTrade(tradeId, {
       message: "Stop loss placed. Take profit failed: " + String(e?.message || e)
@@ -752,12 +742,12 @@ async function placeExitOrders({ uid, tradeId, pair, volumeStr, takeProfit, stop
   }
 
   await updateTrade(tradeId, {
-    exit_tp_txid: tpTxid || null,
+    exit_tp_txid: tpExitTxid || null,
     exit_sl_txid: slTxid || null,
     exit_status: "open"
   });
 
-  return { tpTxid, slTxid };
+  return { tpTxid: tpExitTxid, slTxid };
 }
 
 /* Protected pages */
