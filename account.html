@@ -22,6 +22,7 @@
     .good { color: lightgreen; }
     .bad { color: #ff5555; }
     .warn { color: #ffcc00; }
+    .priceHighlight { background: #1f6feb; color: #fff; font-weight: bold; }
 
     .tools { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
     input { border-radius: 10px; border: 1px solid #30363d; background: #0d1117; color: #e6edf3; padding: 10px 12px; width: 280px; }
@@ -38,6 +39,12 @@
     .pager { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
 
     .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .linkBtnSmall { background: transparent; border: 1px solid #30363d; color: #58a6ff; padding: 6px 10px; border-radius: 8px; text-decoration: none; cursor: pointer; }
+    .linkBtnSmall:hover { filter: brightness(1.1); }
+    .modalBackdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; z-index: 50; }
+    .modal { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 16px; width: 92%; max-width: 560px; }
+    .modalHeader { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .modalTitle { font-size: 16px; font-weight: bold; }
   </style>
 </head>
 <body>
@@ -76,8 +83,8 @@
             <th>Volume</th>
             <th>TP</th>
             <th>SL</th>
-            <th>Gross PnL</th>
-            <th>Net PnL</th>
+            <th>Current Price</th>
+            <th>Open Orders</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -92,9 +99,16 @@
         </div>
       </div>
 
-      <div class="muted" style="margin-top:10px;">
-        Net PnL is gross PnL minus fees. If your API does not send fees yet, net will match gross.
+    </div>
+  </div>
+
+  <div class="modalBackdrop" id="ordersModal">
+    <div class="modal">
+      <div class="modalHeader">
+        <div class="modalTitle" id="ordersModalTitle">Open Orders</div>
+        <button id="closeOrdersModal">Close</button>
       </div>
+      <div id="ordersModalBody" class="muted">Loading...</div>
     </div>
   </div>
 
@@ -128,6 +142,22 @@
       return d;
     }
 
+    function fmt(n, dp) {
+      const x = Number(n);
+      if (!Number.isFinite(x)) return "";
+      const d = Number.isFinite(dp) ? dp : 6;
+      return x.toFixed(d);
+    }
+
+    function openModal() {
+      document.getElementById("ordersModal").style.display = "flex";
+    }
+
+    function closeModal() {
+      document.getElementById("ordersModal").style.display = "none";
+      document.getElementById("ordersModalBody").textContent = "";
+    }
+
     async function postJson(url, payload) {
       const r = await fetch(url, {
         method: "POST",
@@ -150,13 +180,6 @@
       return d;
     }
 
-    function fmt(n, dp) {
-      const x = Number(n);
-      if (!Number.isFinite(x)) return "";
-      const d = Number.isFinite(dp) ? dp : 6;
-      return x.toFixed(d);
-    }
-
     function canCancel(status) {
       const s = String(status || "").toLowerCase();
       return s.includes("open") || s.includes("pending") || s.includes("submitted") || s.includes("partial");
@@ -168,24 +191,37 @@
       return true;
     }
 
+    function normalizeAssetCode(code) {
+      return String(code || "").replace(/^X|^Z/, "").toUpperCase();
+    }
+
+    function balanceForAsset(balance, assetCode) {
+      const b = balance || {};
+      const keys = Object.keys(b);
+      if (!assetCode) return null;
+
+      const exactKey = keys.find((k) => k.toUpperCase() === assetCode.toUpperCase());
+      if (exactKey) return Number(b[exactKey]);
+
+      const normalized = normalizeAssetCode(assetCode);
+      const matchKey = keys.find((k) => normalizeAssetCode(k) === normalized);
+      if (matchKey) return Number(b[matchKey]);
+
+      return null;
+    }
+
     async function refreshBalance() {
       try {
         const d = await getJson(apiUrl("/balance"));
-        const b = d.balance || {};
-        const keys = Object.keys(b);
-
         const wrap = document.getElementById("balanceLines");
         wrap.innerHTML = "";
 
-        keys.sort((a, b) => a === "ZUSD" ? -1 : b === "ZUSD" ? 1 : a.localeCompare(b));
-        for (const k of keys) {
-          const v = String(b[k]);
-          const row = document.createElement("div");
-          row.className = "kv";
-          const cls = k === "ZUSD" ? "good" : "muted";
-          row.innerHTML = "<span>" + k + "</span><span class='" + cls + "'>" + v + "</span>";
-          wrap.appendChild(row);
-        }
+        const b = d.balance || {};
+        const zusd = b.ZUSD ?? b.USD ?? null;
+        const row = document.createElement("div");
+        row.className = "kv";
+        row.innerHTML = "<span>ZUSD</span><span class='good'>" + (zusd !== null ? String(zusd) : "0") + "</span>";
+        wrap.appendChild(row);
 
         const avail = Number(d.availableZusd);
         if (Number.isFinite(avail)) {
@@ -203,6 +239,96 @@
       }
     }
 
+    async function fetchCurrentPrices(pairs) {
+      const uniq = Array.from(new Set(pairs.filter(Boolean)));
+      if (!uniq.length) return {};
+
+      const url = "https://api.kraken.com/0/public/Ticker?pair=" + encodeURIComponent(uniq.join(","));
+      try {
+        const r = await fetch(url);
+        const d = await r.json();
+        const result = d?.result || {};
+        const map = {};
+
+        for (const [key, val] of Object.entries(result)) {
+          const price = Number(val?.c?.[0]);
+          if (!Number.isFinite(price)) continue;
+          map[key] = price;
+          if (val?.altname) {
+            map[val.altname] = price;
+          }
+        }
+        return map;
+      } catch (e) {
+        return {};
+      }
+    }
+
+    async function fetchPairMeta(pairs) {
+      const uniq = Array.from(new Set(pairs.filter(Boolean)));
+      if (!uniq.length) return {};
+
+      const url = "https://api.kraken.com/0/public/AssetPairs?pair=" + encodeURIComponent(uniq.join(","));
+      try {
+        const r = await fetch(url);
+        const d = await r.json();
+        const result = d?.result || {};
+        const map = {};
+
+        for (const [key, val] of Object.entries(result)) {
+          const base = String(val?.base || "");
+          const quote = String(val?.quote || "");
+          if (!base) continue;
+          map[key] = { base, quote };
+          if (val?.altname) {
+            map[val.altname] = { base, quote };
+          }
+          if (val?.wsname) {
+            map[val.wsname.replace("/", "")] = { base, quote };
+          }
+        }
+
+        return map;
+      } catch {
+        return {};
+      }
+    }
+
+    async function loadOpenOrders(pair, tradeId) {
+      const modalBody = document.getElementById("ordersModalBody");
+      modalBody.textContent = "Loading...";
+      document.getElementById("ordersModalTitle").textContent = "Open Orders - " + pair;
+      openModal();
+
+      try {
+        const resp = await getJson(apiUrl("/api/orders/open?pair=" + encodeURIComponent(pair) + "&tradeId=" + tradeId));
+        if (resp.deleted) {
+          modalBody.innerHTML = "<div class='bad'>No open orders. Trade removed.</div>";
+          const row = document.querySelector("tr[data-trade-id='" + tradeId + "']");
+          if (row) row.remove();
+          return;
+        }
+
+        const items = resp.orders || [];
+        if (!items.length) {
+          modalBody.innerHTML = "<div class='muted'>No open orders.</div>";
+          return;
+        }
+
+        const list = items.map((o) => {
+          const side = String(o?.descr?.type || "").toUpperCase();
+          const type = String(o?.descr?.ordertype || "");
+          const price = o?.descr?.price ? Number(o.descr.price).toFixed(6) : "-";
+          const vol = o?.vol ? Number(o.vol).toFixed(6) : "-";
+          return "<div class='kv'><span>" + side + " " + type + "</span><span>" + vol + " @ " + price + "</span></div>";
+        }).join("");
+
+        modalBody.innerHTML = list;
+      } catch (err) {
+        modalBody.innerHTML = "<div class='bad'>" + String(err.message || err) + "</div>";
+      }
+    }
+
     async function refreshTrades() {
       const body = document.getElementById("tradeBody");
       body.innerHTML = "";
@@ -217,20 +343,29 @@
         return;
       }
 
-      const items = data.items || [];
+      const rawItems = data.items || [];
+      const items = rawItems.filter((t) => canClose(t.status));
+      const pairList = items.map((t) => String(t.pair || ""));
+      const [priceMap, pairMetaMap, balanceResp] = await Promise.all([
+        fetchCurrentPrices(pairList),
+        fetchPairMeta(pairList),
+        getJson(apiUrl("/balance"))
+      ]);
+      const balance = balanceResp?.balance || {};
 
       for (const t of items) {
         const tr = document.createElement("tr");
 
-        const gross = Number(t.pnlUsd ?? t.grossPnlUsd ?? t.pnl ?? 0);
-        const fee = Number(t.feeUsd ?? t.feesUsd ?? 0);
-        const net = (Number.isFinite(gross) ? (gross - (Number.isFinite(fee) ? fee : 0)) : 0);
+        const pair = String(t.pair || "");
+        const currentPrice = Number(priceMap[pair]);
+        const priceClass = Number.isFinite(currentPrice) ? "priceHighlight" : "muted";
 
-        const grossCls = gross > 0 ? "good" : (gross < 0 ? "bad" : "muted");
-        const netCls = net > 0 ? "good" : (net < 0 ? "bad" : "muted");
-
-        const txid = String(t.txid || "");
-        const status = String(t.status || "");
+        const pairMeta = pairMetaMap[pair];
+        const baseAsset = pairMeta?.base || "";
+        const baseBalance = balanceForAsset(balance, baseAsset);
+        if (!Number.isFinite(baseBalance) || baseBalance <= 0) {
+          continue;
+        }
 
         const actionWrap = document.createElement("div");
         actionWrap.className = "actions";
@@ -238,10 +373,11 @@
         const cancelBtn = document.createElement("button");
         cancelBtn.textContent = "Cancel";
         cancelBtn.className = "danger";
-        cancelBtn.disabled = !txid || !canCancel(status);
+        cancelBtn.disabled = !String(t.txid || "") || !canCancel(t.status);
 
         cancelBtn.addEventListener("click", async (e) => {
           e.stopPropagation();
+          const txid = String(t.txid || "");
           if (!txid) return;
           const ok = confirm("Cancel this order " + txid + " ?");
           if (!ok) return;
@@ -260,7 +396,7 @@
         const closeBtn = document.createElement("button");
         closeBtn.textContent = "Sell now";
         closeBtn.className = "primary";
-        closeBtn.disabled = !canClose(status);
+        closeBtn.disabled = !canClose(t.status);
 
         closeBtn.addEventListener("click", async (e) => {
           e.stopPropagation();
@@ -281,19 +417,29 @@
         actionWrap.appendChild(cancelBtn);
         actionWrap.appendChild(closeBtn);
 
+        const openOrdersBtn = document.createElement("button");
+        openOrdersBtn.className = "linkBtnSmall";
+        openOrdersBtn.textContent = "View";
+        openOrdersBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          loadOpenOrders(pair, t.id);
+        });
+
         tr.innerHTML =
           "<td>" + (t.time ? new Date(t.time).toLocaleString() : (t.createdAt ? new Date(t.createdAt).toLocaleString() : "")) + "</td>" +
-          "<td>" + String(t.pair || "") + "</td>" +
+          "<td>" + pair + "</td>" +
           "<td>" + String(t.side || "") + "</td>" +
           "<td>" + String(t.status || "") + "</td>" +
           "<td>" + fmt(t.entryPrice ?? t.entry, 6) + "</td>" +
           "<td>" + fmt(t.volume, 6) + "</td>" +
           "<td>" + fmt(t.takeProfit ?? t.tp, 6) + "</td>" +
           "<td>" + fmt(t.stopLoss ?? t.sl, 6) + "</td>" +
-          "<td class='" + grossCls + "'>" + (Number.isFinite(gross) ? gross.toFixed(4) : "") + "</td>" +
-          "<td class='" + netCls + "'>" + (Number.isFinite(net) ? net.toFixed(4) : "") + "</td>" +
+          "<td class='" + priceClass + "'>" + (Number.isFinite(currentPrice) ? currentPrice.toFixed(6) : "") + "</td>" +
+          "<td></td>" +
           "<td></td>";
 
+        tr.setAttribute("data-trade-id", String(t.id || ""));
+        tr.children[9].appendChild(openOrdersBtn);
         tr.children[10].appendChild(actionWrap);
 
         body.appendChild(tr);
@@ -333,6 +479,11 @@
     refreshTrades();
     setInterval(refreshBalance, 60000);
     setInterval(refreshTrades, 60000);
+
+    document.getElementById("closeOrdersModal").addEventListener("click", closeModal);
+    document.getElementById("ordersModal").addEventListener("click", (e) => {
+      if (e.target.id === "ordersModal") closeModal();
+    });
   </script>
 </body>
 </html>

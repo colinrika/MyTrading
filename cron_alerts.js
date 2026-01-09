@@ -19,6 +19,13 @@ const ALERT_COOLDOWN_MS = Number(process.env.ALERT_COOLDOWN_MS || (10 * 60 * 100
 
 const SAFE_TRADES_FILE_RAW = String(process.env.SAFE_TRADES_FILE || "./latest_safe_trades.json");
 const SAFE_TRADES_KEEP_LAST_MS = Number(process.env.SAFE_TRADES_KEEP_LAST_MS || (20 * 60 * 1000));
+const QUICK_PROFIT_PCT = 0.02;
+const KRAKEN_FEE_PCT = Number(process.env.KRAKEN_FEE_PCT || 0.0026);
+
+function targetMovePct() {
+  const feePct = Number.isFinite(KRAKEN_FEE_PCT) ? KRAKEN_FEE_PCT : 0;
+  return QUICK_PROFIT_PCT + Math.max(0, feePct);
+}
 
 function toAbs(p) {
   const s = String(p || "");
@@ -192,10 +199,9 @@ function decideStrategyOrder(res, currentPrice) {
 
   if (upBias && reclaimLong) {
     const entry = currentPrice;
-    const swingLow = approxPullbackSwingLow(m5Closes, 12);
-    const stop = swingLow ? (swingLow * 0.999) : (entry * 0.992);
-    const r = entry - stop;
-    const tp = entry + (r * 2.0);
+    const movePct = targetMovePct();
+    const stop = entry * (1 - movePct);
+    const tp = entry * (1 + movePct);
 
     return {
       quality: 85,
@@ -211,10 +217,9 @@ function decideStrategyOrder(res, currentPrice) {
 
   if (downBias && reclaimShort) {
     const entry = currentPrice;
-    const swingHigh = approxPullbackSwingHigh(m5Closes, 12);
-    const stop = swingHigh ? (swingHigh * 1.001) : (entry * 1.008);
-    const r = stop - entry;
-    const tp = entry - (r * 2.0);
+    const movePct = targetMovePct();
+    const stop = entry * (1 + movePct);
+    const tp = entry * (1 - movePct);
 
     return {
       quality: 82,
