@@ -11,7 +11,8 @@ const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || "");
 const APP_BASE_URL = String(process.env.APP_BASE_URL || "").replace(/\/+$/, "");
 
 const MAX_SCAN_PAIRS = Number(process.env.ALERT_MAX_SCAN_PAIRS || 30);
-const QUALITY_MIN = Number(process.env.ALERT_QUALITY_MIN || 80);
+const QUALITY_MIN = Number(process.env.ALERT_BUY_QUALITY_MIN || 90);
+const POTENTIAL_QUALITY_MIN = Number(process.env.ALERT_POTENTIAL_QUALITY_MIN || 70);
 const TOP_TO_SEND = Number(process.env.ALERT_TOP_TO_SEND || 3);
 
 const ALERT_SIG_FILE_RAW = String(process.env.ALERT_SIG_FILE || "./last_alert_sig.txt");
@@ -19,6 +20,13 @@ const ALERT_COOLDOWN_MS = Number(process.env.ALERT_COOLDOWN_MS || (10 * 60 * 100
 
 const SAFE_TRADES_FILE_RAW = String(process.env.SAFE_TRADES_FILE || "./latest_safe_trades.json");
 const SAFE_TRADES_KEEP_LAST_MS = Number(process.env.SAFE_TRADES_KEEP_LAST_MS || (20 * 60 * 1000));
+const QUICK_PROFIT_PCT = 0.02;
+const KRAKEN_FEE_PCT = Number(process.env.KRAKEN_FEE_PCT || 0.0026);
+
+function targetMovePct() {
+  const feePct = Number.isFinite(KRAKEN_FEE_PCT) ? KRAKEN_FEE_PCT : 0;
+  return QUICK_PROFIT_PCT + Math.max(0, feePct);
+}
 
 function toAbs(p) {
   const s = String(p || "");
@@ -190,16 +198,20 @@ function decideStrategyOrder(res, currentPrice) {
 
   if (!upBias && !downBias) return { quality: 0, tag: "Chop zone", side: null };
 
-  if (upBias && reclaimLong) {
+  const lastVol = Number(m5[m5.length - 1].volume || 0);
+  const volWindow = m5.slice(-20).map(x => Number(x.volume || 0));
+  const avgVol = volWindow.length ? volWindow.reduce((a, b) => a + b, 0) / volWindow.length : 0;
+  const volSpike = avgVol > 0 && lastVol > avgVol * 1.2;
+
+  if (upBias && reclaimLong && volSpike) {
     const entry = currentPrice;
-    const swingLow = approxPullbackSwingLow(m5Closes, 12);
-    const stop = swingLow ? (swingLow * 0.999) : (entry * 0.992);
-    const r = entry - stop;
-    const tp = entry + (r * 2.0);
+    const movePct = targetMovePct();
+    const stop = entry * (1 - movePct);
+    const tp = entry * (1 + movePct);
 
     return {
-      quality: 85,
-      tag: "Trend pullback reclaim",
+      quality: 92,
+      tag: "Trend pullback reclaim + volume",
       actionTitle: "Buy after pullback confirms",
       side: "buy",
       orderType: "limit",
@@ -211,10 +223,9 @@ function decideStrategyOrder(res, currentPrice) {
 
   if (downBias && reclaimShort) {
     const entry = currentPrice;
-    const swingHigh = approxPullbackSwingHigh(m5Closes, 12);
-    const stop = swingHigh ? (swingHigh * 1.001) : (entry * 1.008);
-    const r = stop - entry;
-    const tp = entry - (r * 2.0);
+    const movePct = targetMovePct();
+    const stop = entry * (1 + movePct);
+    const tp = entry * (1 - movePct);
 
     return {
       quality: 82,
@@ -225,6 +236,17 @@ function decideStrategyOrder(res, currentPrice) {
       price: entry,
       stopLoss: stop,
       takeProfit: tp
+    };
+  }
+
+  if (upBias) {
+    return {
+      quality: 72,
+      tag: "Uptrend building",
+      actionTitle: "Potential upclimb",
+      side: null,
+      potential: true,
+      price: currentPrice
     };
   }
 
@@ -331,6 +353,63 @@ function buildTelegramMessage(trades) {
   return msg;
 }
 
+function usd(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return "$0.00";
+  return "$" + x.toFixed(2);
+}
+
+function buildPotentialMessage(trades) {
+  const now = new Date().toISOString();
+  let msg = `Potential upclimb watch ${now}\n\n`;
+
+  for (const t of trades) {
+    const rec = t.recommended || {};
+    msg += `${prettyPair(t.pair)}\n`;
+    msg += `Watch  Quality ${Number(rec.quality || 0)}\n`;
+    msg += `Entry ${round6(rec.price ?? t.last ?? 0)}\n`;
+    msg += `\n`;
+  }
+
+  return msg;
+}
+
+function buildBuyNowMessage(trades, pairMetaMap) {
+  const now = new Date().toISOString();
+  let msg = `BUY NOW alert ${now}\n\n`;
+
+  for (const t of trades) {
+    const rec = t.recommended || {};
+    const link = buildTradeLink(t.pair);
+    const entry = Number(rec.price ?? t.last ?? 0);
+    const tp = Number(rec.takeProfit);
+    const meta = pairMetaMap[t.pair] || {};
+    const ordermin = Number(meta.ordermin);
+    const costmin = Number(meta.costmin);
+    const minUsd = Number.isFinite(costmin)
+      ? costmin
+      : (Number.isFinite(ordermin) && Number.isFinite(entry) && entry > 0 ? ordermin * entry : null);
+
+    let profitUsd = null;
+    if (Number.isFinite(minUsd) && Number.isFinite(entry) && entry > 0 && Number.isFinite(tp)) {
+      const qty = minUsd / entry;
+      profitUsd = (tp - entry) * qty;
+    }
+
+    msg += `${prettyPair(t.pair)}\n`;
+    msg += `BUY  Quality ${Number(rec.quality || 0)}\n`;
+    msg += `Entry ${round6(entry)}\n`;
+    if (rec.takeProfit != null) msg += `TP ${round6(rec.takeProfit)}\n`;
+    if (rec.stopLoss != null) msg += `SL ${round6(rec.stopLoss)}\n`;
+    if (Number.isFinite(minUsd)) msg += `Min amount ${usd(minUsd)}\n`;
+    if (Number.isFinite(profitUsd)) msg += `Est profit ${usd(profitUsd)}\n`;
+    if (link) msg += `Open ${link}\n`;
+    msg += `\n`;
+  }
+
+  return msg;
+}
+
 function makeAlertSignature(trades) {
   return trades.map(t => {
     const r = t.recommended || {};
@@ -349,18 +428,35 @@ function makeAlertSignature(trades) {
 function readPrevAlertState() {
   try {
     const raw = fs.readFileSync(ALERT_SIG_FILE, "utf8");
+    if (raw.trim().startsWith("{")) {
+      const parsed = JSON.parse(raw);
+      const buy = parsed?.buy || {};
+      const potential = parsed?.potential || {};
+      return {
+        buy: { ts: Number(buy.ts || 0), sig: String(buy.sig || "") },
+        potential: { ts: Number(potential.ts || 0), sig: String(potential.sig || "") }
+      };
+    }
+
     const parts = raw.split("\n");
     const ts = Number(parts[0] || 0);
     const sig = String(parts.slice(1).join("\n") || "").trim();
-    return { ts: Number.isFinite(ts) ? ts : 0, sig };
+    return {
+      buy: { ts: Number.isFinite(ts) ? ts : 0, sig },
+      potential: { ts: 0, sig: "" }
+    };
   } catch {
-    return { ts: 0, sig: "" };
+    return { buy: { ts: 0, sig: "" }, potential: { ts: 0, sig: "" } };
   }
 }
 
-function writePrevAlertState(sig) {
+function writePrevAlertState(state) {
   try {
-    fs.writeFileSync(ALERT_SIG_FILE, String(Date.now()) + "\n" + String(sig || ""), "utf8");
+    const payload = {
+      buy: state.buy || { ts: 0, sig: "" },
+      potential: state.potential || { ts: 0, sig: "" }
+    };
+    fs.writeFileSync(ALERT_SIG_FILE, JSON.stringify(payload, null, 2), "utf8");
   } catch {
   }
 }
@@ -392,6 +488,28 @@ function isActionableBuy(rec) {
   return side === "buy" && q >= QUALITY_MIN && Number.isFinite(price) && price > 0;
 }
 
+function isPotentialUpclimb(rec) {
+  const q = Number(rec?.quality || 0);
+  return rec?.potential === true && q >= POTENTIAL_QUALITY_MIN;
+}
+
+async function fetchPairMetaMap() {
+  const r = await fetch("https://api.kraken.com/0/public/AssetPairs");
+  const j = await r.json();
+  const result = j.result || {};
+  const map = {};
+
+  for (const key of Object.keys(result)) {
+    const info = result[key] || {};
+    map[key] = {
+      ordermin: Number(info.ordermin),
+      costmin: Number(info.costmin)
+    };
+  }
+
+  return map;
+}
+
 async function runOnce() {
   if (!telegramConfigured()) throw new Error("Missing TELEGRAM env values");
 
@@ -402,6 +520,7 @@ async function runOnce() {
   const topPairs = await getTopPairsByVolumeUsd(allPairs, MAX_SCAN_PAIRS);
 
   const results = [];
+  const pairMetaMap = await fetchPairMetaMap();
 
   for (const p of topPairs) {
     try {
@@ -415,19 +534,18 @@ async function runOnce() {
       const rowObj = { pair: p, h1, h4, m5, last };
 
       rowObj.recommended = decideStrategyOrder(rowObj, last);
-
-      if (isActionableBuy(rowObj.recommended)) {
-        results.push(rowObj);
-      }
+      results.push(rowObj);
     } catch {
     }
   }
 
   results.sort((a, b) => Number(b.recommended.quality || 0) - Number(a.recommended.quality || 0));
-  const toSend = results.slice(0, TOP_TO_SEND);
+  const top = results.slice(0, TOP_TO_SEND);
+  const toSend = top.filter(x => isActionableBuy(x.recommended));
+  const potential = top.filter(x => isPotentialUpclimb(x.recommended));
 
-  if (!toSend.length) {
-    console.log("No actionable BUY trades right now");
+  if (!toSend.length && !potential.length) {
+    console.log("No actionable BUY or potential trades right now");
 
     const prev = readSafeTradesFile();
     const prevTs = Number(prev?.ts || 0);
@@ -443,24 +561,33 @@ async function runOnce() {
     return;
   }
 
-  const sig = makeAlertSignature(toSend);
+  const sigs = {
+    buy: makeAlertSignature(toSend),
+    potential: makeAlertSignature(potential)
+  };
   const prevAlert = readPrevAlertState();
-
-  const same = prevAlert.sig === sig;
-  const inCooldown = (Date.now() - prevAlert.ts) < ALERT_COOLDOWN_MS;
+  const now = Date.now();
 
   writeSafeTrades(toSend);
 
-  if (same || inCooldown) {
-    console.log("Skipping Telegram alert", same ? "same_signature" : "cooldown");
-    return;
+  const buyFresh = sigs.buy && (sigs.buy !== prevAlert.buy.sig || (now - prevAlert.buy.ts) >= ALERT_COOLDOWN_MS);
+  const potentialFresh = sigs.potential && (sigs.potential !== prevAlert.potential.sig || (now - prevAlert.potential.ts) >= ALERT_COOLDOWN_MS);
+
+  if (toSend.length && buyFresh) {
+    const msg = buildBuyNowMessage(toSend, pairMetaMap);
+    await sendTelegram(msg);
+    prevAlert.buy = { sig: sigs.buy, ts: now };
+    console.log("Sent BUY NOW alert for", toSend.map(x => x.pair).join(", "));
   }
 
-  const msg = buildTelegramMessage(toSend);
-  await sendTelegram(msg);
-  writePrevAlertState(sig);
+  if (potential.length && potentialFresh) {
+    const msg = buildPotentialMessage(potential);
+    await sendTelegram(msg);
+    prevAlert.potential = { sig: sigs.potential, ts: now };
+    console.log("Sent potential alert for", potential.map(x => x.pair).join(", "));
+  }
 
-  console.log("Sent Telegram alert for", toSend.map(x => x.pair).join(", "));
+  writePrevAlertState(prevAlert);
 }
 
 (async () => {
