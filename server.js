@@ -297,6 +297,18 @@ function isStablePair(pair) {
   return STABLE_BASES.has(base);
 }
 
+function getAllUsdPairsFromMeta() {
+  const pairs = [];
+  for (const [key, meta] of pairMetaCache.entries()) {
+    const wsname = String(meta?.wsname || "");
+    if (!wsname.endsWith("/USD")) continue;
+    if (String(key).includes(".")) continue;
+    if (isStablePair(key)) continue;
+    pairs.push(key);
+  }
+  return pairs;
+}
+
 async function getTopUsdPairsByVolume(limit = 20) {
   const r = await fetch("https://api.kraken.com/0/public/Ticker");
   const j = await r.json();
@@ -632,7 +644,7 @@ async function computeSafestTradesNow(uid) {
 
   await ensurePairMetaLoaded(client);
 
-  const candidates = await getTopUsdPairsByVolume(20);
+  const candidates = getAllUsdPairsFromMeta();
   const safeTrades = [];
 
   for (const pair of candidates) {

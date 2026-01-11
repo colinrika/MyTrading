@@ -517,7 +517,7 @@ async function runOnce() {
   console.log("ALERT_SIG_FILE:", ALERT_SIG_FILE);
 
   const allPairs = await getAllUsdPairs();
-  const topPairs = await getTopPairsByVolumeUsd(allPairs, MAX_SCAN_PAIRS);
+  const topPairs = allPairs;
 
   const results = [];
   const pairMetaMap = await fetchPairMetaMap();
@@ -543,6 +543,7 @@ async function runOnce() {
   const top = results.slice(0, TOP_TO_SEND);
   const toSend = top.filter(x => isActionableBuy(x.recommended));
   const potential = top.filter(x => isPotentialUpclimb(x.recommended));
+  const buyNowEligible = toSend.length >= 3;
 
   if (!toSend.length && !potential.length) {
     console.log("No actionable BUY or potential trades right now");
@@ -562,7 +563,7 @@ async function runOnce() {
   }
 
   const sigs = {
-    buy: makeAlertSignature(toSend),
+    buy: makeAlertSignature(buyNowEligible ? toSend : []),
     potential: makeAlertSignature(potential)
   };
   const prevAlert = readPrevAlertState();
@@ -573,11 +574,13 @@ async function runOnce() {
   const buyFresh = sigs.buy && (sigs.buy !== prevAlert.buy.sig || (now - prevAlert.buy.ts) >= ALERT_COOLDOWN_MS);
   const potentialFresh = sigs.potential && (sigs.potential !== prevAlert.potential.sig || (now - prevAlert.potential.ts) >= ALERT_COOLDOWN_MS);
 
-  if (toSend.length && buyFresh) {
+  if (buyNowEligible && buyFresh) {
     const msg = buildBuyNowMessage(toSend, pairMetaMap);
     await sendTelegram(msg);
     prevAlert.buy = { sig: sigs.buy, ts: now };
     console.log("Sent BUY NOW alert for", toSend.map(x => x.pair).join(", "));
+  } else if (!buyNowEligible && toSend.length) {
+    console.log("Skipping BUY NOW alert: need at least 3 actionable coins");
   }
 
   if (potential.length && potentialFresh) {
