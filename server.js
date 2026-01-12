@@ -55,6 +55,13 @@ const pool = new Pool({
 });
 
 const SAFE_TRADES_FILE = process.env.SAFE_TRADES_FILE || "./latest_safe_trades.json";
+const QUICK_PROFIT_PCT = 0.02;
+const KRAKEN_FEE_PCT = Number(process.env.KRAKEN_FEE_PCT || 0.0026);
+
+function targetMovePct() {
+  const feePct = Number.isFinite(KRAKEN_FEE_PCT) ? KRAKEN_FEE_PCT : 0;
+  return QUICK_PROFIT_PCT + Math.max(0, feePct);
+}
 
 async function dbRun(sql, params = []) {
   return pool.query(sql, params);
@@ -290,6 +297,18 @@ function isStablePair(pair) {
   return STABLE_BASES.has(base);
 }
 
+function getAllUsdPairsFromMeta() {
+  const pairs = [];
+  for (const [key, meta] of pairMetaCache.entries()) {
+    const wsname = String(meta?.wsname || "");
+    if (!wsname.endsWith("/USD")) continue;
+    if (String(key).includes(".")) continue;
+    if (isStablePair(key)) continue;
+    pairs.push(key);
+  }
+  return pairs;
+}
+
 async function getTopUsdPairsByVolume(limit = 20) {
   const r = await fetch("https://api.kraken.com/0/public/Ticker");
   const j = await r.json();
@@ -346,6 +365,8 @@ async function ensurePairMetaLoaded(krakenClient) {
     const info = result[key] || {};
     pairMetaCache.set(key, {
       wsname: info.wsname || "",
+      base: info.base || "",
+      quote: info.quote || "",
       pair_decimals: numOrNull(info.pair_decimals) ?? 5,
       lot_decimals: numOrNull(info.lot_decimals) ?? 8,
       ordermin: numOrNull(info.ordermin),
@@ -366,7 +387,22 @@ async function getPairMeta(krakenClient, pair) {
     if (v.wsname && v.wsname === pair) return v;
   }
 
-  return { wsname: "", pair_decimals: 5, lot_decimals: 8, ordermin: null, costmin: null };
+  return { wsname: "", base: "", quote: "", pair_decimals: 5, lot_decimals: 8, ordermin: null, costmin: null };
+}
+
+function findBalanceForAsset(balance, assetCode) {
+  const b = balance || {};
+  const keys = Object.keys(b);
+  if (!assetCode) return { asset: "", amount: null };
+
+  const directKey = keys.find((k) => k.toUpperCase() === assetCode.toUpperCase());
+  if (directKey) return { asset: directKey, amount: numOrNull(b[directKey]) };
+
+  const normalizedCode = assetCode.replace(/^X|^Z/, "").toUpperCase();
+  const prefixedKey = keys.find((k) => k.replace(/^X|^Z/, "").toUpperCase() === normalizedCode);
+  if (prefixedKey) return { asset: prefixedKey, amount: numOrNull(b[prefixedKey]) };
+
+  return { asset: "", amount: null };
 }
 
 function formatOrderNumbers(meta, payload) {
@@ -424,6 +460,19 @@ async function queryOrder(krakenClient, uid, txid) {
   const result = resp?.result || {};
   const order = result[txid];
   return order || null;
+}
+
+async function fetchOpenOrdersForPair(client, uid, pair) {
+  const meta = await getPairMeta(client, pair);
+  const normalizedPair = String(pair).replace("/", "");
+  const wsPair = String(meta.wsname || "").replace("/", "");
+  const resp = await krakenApiWithNonceRetry(client, uid, "OpenOrders");
+  const openOrders = resp?.result?.open || {};
+  const orders = Object.values(openOrders).filter((o) => {
+    const descrPair = String(o?.descr?.pair || "").replace("/", "");
+    return descrPair === normalizedPair || (wsPair && descrPair === wsPair);
+  });
+  return orders;
 }
 
 function safeStr(v) {
@@ -595,7 +644,7 @@ async function computeSafestTradesNow(uid) {
 
   await ensurePairMetaLoaded(client);
 
-  const candidates = await getTopUsdPairsByVolume(20);
+  const candidates = getAllUsdPairsFromMeta();
   const safeTrades = [];
 
   for (const pair of candidates) {
@@ -661,14 +710,6 @@ async function placeExitOrders({ uid, tradeId, pair, volumeStr, takeProfit, stop
   const volume = String(volumeStr);
 
   // Spot friendly. Remove reduce only flags since they can fail on spot.
-  const tpParams = {
-    pair,
-    type: "sell",
-    ordertype: "take-profit",
-    price: String(tp),
-    volume
-  };
-
   const slParams = {
     pair,
     type: "sell",
@@ -677,19 +718,86 @@ async function placeExitOrders({ uid, tradeId, pair, volumeStr, takeProfit, stop
     volume
   };
 
-  const tpResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", tpParams);
-  const tpTxid = Array.isArray(tpResp?.result?.txid) ? tpResp.result.txid[0] : "";
+  const tpParams = {
+    pair,
+    type: "sell",
+    ordertype: "take-profit",
+    price: String(tp),
+    volume
+  };
 
-  const slResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", slParams);
-  const slTxid = Array.isArray(slResp?.result?.txid) ? slResp.result.txid[0] : "";
+  let slResp;
+  let slTxid = "";
+  try {
+    slResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", slParams);
+    slTxid = Array.isArray(slResp?.result?.txid) ? slResp.result.txid[0] : "";
+  } catch {
+    slTxid = "";
+  }
+
+  if (!slTxid) {
+    const fallbackLimit = clampPrice(meta, sl * 0.995);
+    if (!fallbackLimit) throw new Error("Stop loss placement failed");
+
+    const slLimitParams = {
+      pair,
+      type: "sell",
+      ordertype: "stop-loss-limit",
+      price: String(sl),
+      price2: String(fallbackLimit),
+      volume
+    };
+
+    const slLimitResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", slLimitParams);
+    slTxid = Array.isArray(slLimitResp?.result?.txid) ? slLimitResp.result.txid[0] : "";
+  }
+
+  if (!slTxid) {
+    throw new Error("Stop loss placement failed");
+  }
+
+  let tpExitTxid = "";
+  try {
+    const tpResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", tpParams);
+    tpExitTxid = Array.isArray(tpResp?.result?.txid) ? tpResp.result.txid[0] : "";
+  } catch {
+    tpExitTxid = "";
+  }
+
+  if (!tpExitTxid) {
+    const fallbackLimit = clampPrice(meta, tp * 0.995);
+    if (fallbackLimit) {
+      const tpLimitParams = {
+        pair,
+        type: "sell",
+        ordertype: "take-profit-limit",
+        price: String(tp),
+        price2: String(fallbackLimit),
+        volume
+      };
+
+      try {
+        const tpLimitResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", tpLimitParams);
+        tpExitTxid = Array.isArray(tpLimitResp?.result?.txid) ? tpLimitResp.result.txid[0] : "";
+      } catch {
+        tpExitTxid = "";
+      }
+    }
+  }
+
+  if (!tpExitTxid) {
+    await updateTrade(tradeId, {
+      message: "Stop loss placed. Take profit failed to place."
+    });
+  }
 
   await updateTrade(tradeId, {
-    exit_tp_txid: tpTxid || null,
+    exit_tp_txid: tpExitTxid || null,
     exit_sl_txid: slTxid || null,
     exit_status: "open"
   });
 
-  return { tpTxid, slTxid };
+  return { tpTxid: tpExitTxid, slTxid };
 }
 
 /* Protected pages */
@@ -862,6 +970,31 @@ app.get("/api/account/status", authRequired, async (req, res) => {
   }
 });
 
+app.get("/api/orders/open", authRequired, async (req, res) => {
+  try {
+    const pair = String(req.query.pair || "").trim();
+    const tradeId = Number(req.query.tradeId || 0);
+    if (!pair) return res.status(400).json({ error: "pair is required" });
+
+    const client = await getUserKrakenClient(req.user.uid);
+    if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
+
+    const orders = await fetchOpenOrdersForPair(client, req.user.uid, pair);
+
+    if (!orders.length && tradeId) {
+      await dbRun(
+        `delete from public.trades where id = $1 and user_id = $2`,
+        [tradeId, req.user.uid]
+      );
+      return res.json({ ok: true, orders: [], deleted: true });
+    }
+
+    res.json({ ok: true, orders, deleted: false });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to load open orders", details: String(e.message || e) });
+  }
+});
+
 app.get("/pair-info", authRequired, async (req, res) => {
   try {
     const pair = String(req.query.pair || "");
@@ -874,6 +1007,8 @@ app.get("/pair-info", authRequired, async (req, res) => {
     res.json({
       pair,
       wsname: meta.wsname,
+      base: meta.base,
+      quote: meta.quote,
       pair_decimals: meta.pair_decimals,
       lot_decimals: meta.lot_decimals,
       ordermin: meta.ordermin,
@@ -1002,7 +1137,9 @@ app.get("/api/alerts/safest", authRequired, async (req, res) => {
 /* Cron safest alert */
 app.post("/api/cron/safest", async (req, res) => {
   try {
-    const key = String(req.headers["x-cron-key"] || "");
+    const headerKey = String(req.headers["x-cron-key"] || "");
+    const queryKey = String(req.query?.cron_key || "");
+    const key = headerKey || queryKey;
     if (!process.env.CRON_KEY || key !== process.env.CRON_KEY) {
       return res.status(401).json({ ok: false, error: "Unauthorized" });
     }
@@ -1114,21 +1251,81 @@ app.post("/api/order/close", authRequired, async (req, res) => {
       return res.status(400).json({ error: "Only BUY trades can be force closed" });
     }
 
+    if (String(trade.status || "").toLowerCase() === "closed") {
+      return res.json({ ok: true, closed: true, alreadyClosed: true });
+    }
+
     const client = await getUserKrakenClient(req.user.uid);
     if (!client) {
       return res.status(400).json({ error: "No Kraken keys saved" });
     }
+
+    const openOrders = await fetchOpenOrdersForPair(client, req.user.uid, trade.pair);
+    if (openOrders.length) {
+      return res.status(400).json({ error: "Cancel open orders before selling", openOrders: openOrders.length });
+    }
+
+    const exitTxids = [trade.exit_tp_txid, trade.exit_sl_txid]
+      .map((txid) => String(txid || "").trim())
+      .filter(Boolean);
+
+    for (const txid of exitTxids) {
+      try {
+        const exitOrder = await queryOrder(client, req.user.uid, txid);
+        const filled =
+          exitOrder &&
+          String(exitOrder.status || "").toLowerCase() === "closed" &&
+          Number(exitOrder.vol_exec || 0) > 0;
+
+        if (filled) {
+          await dbRun(
+            `update public.trades
+             set status = 'closed', message = 'Exit already filled'
+             where id = $1`,
+            [tradeId]
+          );
+          return res.json({ ok: true, closed: true, alreadyClosed: true, txid });
+        }
+      } catch {
+      }
+    }
+
+    const meta = await getPairMeta(client, trade.pair);
+    const balanceResp = await krakenApiWithNonceRetry(client, req.user.uid, "Balance");
+    const balance = balanceResp?.result || {};
+    const balanceInfo = findBalanceForAsset(balance, meta.base);
+    const available = balanceInfo.amount;
 
     const volume = Number(trade.volume);
     if (!Number.isFinite(volume) || volume <= 0) {
       return res.status(400).json({ error: "Invalid trade volume" });
     }
 
+    if (!Number.isFinite(available) || available <= 0) {
+      return res.status(400).json({ error: "No balance available to sell for this pair" });
+    }
+
+    const ld = meta.lot_decimals ?? 8;
+    const availableRounded = roundToDecimals(available, ld);
+    const availableStr = availableRounded === null ? null : trimNumberString(availableRounded.toFixed(ld));
+    const volumeToSell = Number(available < volume ? availableStr : volume);
+
+    if (!Number.isFinite(volumeToSell) || volumeToSell <= 0) {
+      return res.status(400).json({ error: "No balance available to sell for this pair" });
+    }
+
+    if (meta.ordermin !== null && volumeToSell < meta.ordermin) {
+      return res.status(400).json({
+        error: "Insufficient balance to sell",
+        details: `Available ${available} ${balanceInfo.asset || meta.base} is below minimum order size ${meta.ordermin}`
+      });
+    }
+
     const sellParams = {
       pair: trade.pair,
       type: "sell",
       ordertype: "market",
-      volume: volume.toString()
+      volume: volumeToSell.toString()
     };
 
     const result = await krakenApiWithNonceRetry(
@@ -1142,14 +1339,18 @@ app.post("/api/order/close", authRequired, async (req, res) => {
       ? result.result.txid[0]
       : "";
 
+    const msg = volumeToSell < volume
+      ? "Force sold available balance at market"
+      : "Force sold at market";
+
     await dbRun(
       `update public.trades
-       set status = 'closed', message = 'Force sold at market'
+       set status = 'closed', message = $2, volume = $3
        where id = $1`,
-      [tradeId]
+      [tradeId, msg, volumeToSell]
     );
 
-    res.json({ ok: true, closed: true, txid });
+    res.json({ ok: true, closed: true, txid, volumeSold: volumeToSell });
   } catch (e) {
     res.status(500).json({ error: "Force close failed", details: String(e.message || e) });
   }
@@ -1231,8 +1432,9 @@ app.post("/trade", authRequired, async (req, res) => {
     const entryPrice = nums.price;
     const entryPrice2 = nums.price2;
 
-    const takeProfit = nums.takeProfit ?? clampPrice(meta, entryPrice * 1.05);
-    let stopLoss = nums.stopLoss ?? clampPrice(meta, entryPrice * 0.95);
+    const movePct = targetMovePct();
+    const takeProfit = nums.takeProfit ?? clampPrice(meta, entryPrice * (1 + movePct));
+    let stopLoss = nums.stopLoss ?? clampPrice(meta, entryPrice * (1 - movePct));
     if (String(side).toLowerCase() === "buy") {
       stopLoss = capStopLossForBuy(meta, entryPrice, stopLoss);
     }
