@@ -760,9 +760,34 @@ async function placeExitOrders({ uid, tradeId, pair, volumeStr, takeProfit, stop
   try {
     const tpResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", tpParams);
     tpExitTxid = Array.isArray(tpResp?.result?.txid) ? tpResp.result.txid[0] : "";
-  } catch (e) {
+  } catch {
+    tpExitTxid = "";
+  }
+
+  if (!tpExitTxid) {
+    const fallbackLimit = clampPrice(meta, tp * 0.995);
+    if (fallbackLimit) {
+      const tpLimitParams = {
+        pair,
+        type: "sell",
+        ordertype: "take-profit-limit",
+        price: String(tp),
+        price2: String(fallbackLimit),
+        volume
+      };
+
+      try {
+        const tpLimitResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", tpLimitParams);
+        tpExitTxid = Array.isArray(tpLimitResp?.result?.txid) ? tpLimitResp.result.txid[0] : "";
+      } catch {
+        tpExitTxid = "";
+      }
+    }
+  }
+
+  if (!tpExitTxid) {
     await updateTrade(tradeId, {
-      message: "Stop loss placed. Take profit failed: " + String(e?.message || e)
+      message: "Stop loss placed. Take profit failed to place."
     });
   }
 
