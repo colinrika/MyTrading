@@ -468,10 +468,13 @@ async function fetchOpenOrdersForPair(client, uid, pair) {
   const wsPair = String(meta.wsname || "").replace("/", "");
   const resp = await krakenApiWithNonceRetry(client, uid, "OpenOrders");
   const openOrders = resp?.result?.open || {};
-  const orders = Object.values(openOrders).filter((o) => {
-    const descrPair = String(o?.descr?.pair || "").replace("/", "");
-    return descrPair === normalizedPair || (wsPair && descrPair === wsPair);
-  });
+  const orders = [];
+  for (const [txid, order] of Object.entries(openOrders)) {
+    const descrPair = String(order?.descr?.pair || "").replace("/", "");
+    if (descrPair === normalizedPair || (wsPair && descrPair === wsPair)) {
+      orders.push({ ...order, txid });
+    }
+  }
   return orders;
 }
 
@@ -710,46 +713,32 @@ async function placeExitOrders({ uid, tradeId, pair, volumeStr, takeProfit, stop
   const volume = String(volumeStr);
 
   // Spot friendly. Remove reduce only flags since they can fail on spot.
+  const slLimit = clampPrice(meta, sl * 0.995);
   const slParams = {
     pair,
     type: "sell",
-    ordertype: "stop-loss",
+    ordertype: "stop-loss-limit",
     price: String(sl),
+    price2: slLimit ? String(slLimit) : String(sl),
     volume
   };
 
+  const tpLimit = clampPrice(meta, tp * 0.995);
   const tpParams = {
     pair,
     type: "sell",
-    ordertype: "take-profit",
+    ordertype: "take-profit-limit",
     price: String(tp),
+    price2: tpLimit ? String(tpLimit) : String(tp),
     volume
   };
 
-  let slResp;
   let slTxid = "";
   try {
-    slResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", slParams);
+    const slResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", slParams);
     slTxid = Array.isArray(slResp?.result?.txid) ? slResp.result.txid[0] : "";
   } catch {
     slTxid = "";
-  }
-
-  if (!slTxid) {
-    const fallbackLimit = clampPrice(meta, sl * 0.995);
-    if (!fallbackLimit) throw new Error("Stop loss placement failed");
-
-    const slLimitParams = {
-      pair,
-      type: "sell",
-      ordertype: "stop-loss-limit",
-      price: String(sl),
-      price2: String(fallbackLimit),
-      volume
-    };
-
-    const slLimitResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", slLimitParams);
-    slTxid = Array.isArray(slLimitResp?.result?.txid) ? slLimitResp.result.txid[0] : "";
   }
 
   if (!slTxid) {
@@ -762,27 +751,6 @@ async function placeExitOrders({ uid, tradeId, pair, volumeStr, takeProfit, stop
     tpExitTxid = Array.isArray(tpResp?.result?.txid) ? tpResp.result.txid[0] : "";
   } catch {
     tpExitTxid = "";
-  }
-
-  if (!tpExitTxid) {
-    const fallbackLimit = clampPrice(meta, tp * 0.995);
-    if (fallbackLimit) {
-      const tpLimitParams = {
-        pair,
-        type: "sell",
-        ordertype: "take-profit-limit",
-        price: String(tp),
-        price2: String(fallbackLimit),
-        volume
-      };
-
-      try {
-        const tpLimitResp = await krakenApiWithNonceRetry(client, uid, "AddOrder", tpLimitParams);
-        tpExitTxid = Array.isArray(tpLimitResp?.result?.txid) ? tpLimitResp.result.txid[0] : "";
-      } catch {
-        tpExitTxid = "";
-      }
-    }
   }
 
   if (!tpExitTxid) {
