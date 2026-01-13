@@ -434,7 +434,11 @@
           try {
             const r = await postJson(apiUrl("/api/order/close"), { tradeId: Number(t.id) });
             alert(r && r.closed ? "Close sent" : "Close requested");
-            await refreshTrades();
+            if (r && r.closed) {
+              tr.remove();
+            } else {
+              await refreshTrades();
+            }
           } catch (err) {
             alert(String(err.message || err));
             closeBtn.disabled = false;
