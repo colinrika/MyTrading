@@ -963,6 +963,21 @@ app.get("/api/orders/open", authRequired, async (req, res) => {
   }
 });
 
+app.post("/api/order/cancel", authRequired, async (req, res) => {
+  try {
+    const txid = String(req.body?.txid || "").trim();
+    if (!txid) return res.status(400).json({ error: "Missing txid" });
+
+    const client = await getUserKrakenClient(req.user.uid);
+    if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
+
+    await krakenApiWithNonceRetry(client, req.user.uid, "CancelOrder", { txid });
+    res.json({ ok: true, canceled: true, txid });
+  } catch (e) {
+    res.status(500).json({ error: "Cancel failed", details: String(e.message || e) });
+  }
+});
+
 app.get("/pair-info", authRequired, async (req, res) => {
   try {
     const pair = String(req.query.pair || "");
