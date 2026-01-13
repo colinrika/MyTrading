@@ -949,15 +949,7 @@ app.get("/api/orders/open", authRequired, async (req, res) => {
 
     const orders = await fetchOpenOrdersForPair(client, req.user.uid, pair);
 
-    if (!orders.length && tradeId) {
-      await dbRun(
-        `delete from public.trades where id = $1 and user_id = $2`,
-        [tradeId, req.user.uid]
-      );
-      return res.json({ ok: true, orders: [], deleted: true });
-    }
-
-    res.json({ ok: true, orders, deleted: false });
+    res.json({ ok: true, orders });
   } catch (e) {
     res.status(500).json({ error: "Failed to load open orders", details: String(e.message || e) });
   }

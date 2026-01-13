@@ -318,13 +318,6 @@
 
       try {
         const resp = await getJson(apiUrl("/api/orders/open?pair=" + encodeURIComponent(pair) + "&tradeId=" + tradeId));
-        if (resp.deleted) {
-          modalBody.innerHTML = "<div class='bad'>No open orders. Trade removed.</div>";
-          const row = document.querySelector("tr[data-trade-id='" + tradeId + "']");
-          if (row) row.remove();
-          return;
-        }
-
         const items = resp.orders || [];
         if (!items.length) {
           modalBody.innerHTML = "<div class='muted'>No open orders.</div>";
@@ -400,13 +393,6 @@
         const pair = String(t.pair || "");
         const currentPrice = Number(priceMap[pair]);
         const priceClass = Number.isFinite(currentPrice) ? "priceHighlight" : "muted";
-
-        const pairMeta = pairMetaMap[pair];
-        const baseAsset = pairMeta?.base || "";
-        const baseBalance = balanceForAsset(balance, baseAsset);
-        if (!Number.isFinite(baseBalance) || baseBalance <= 0) {
-          continue;
-        }
 
         const actionWrap = document.createElement("div");
         actionWrap.className = "actions";
