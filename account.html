@@ -376,7 +376,7 @@
         data = await getJson(apiUrl("/trades?page=" + page + "&pageSize=" + LIMIT + "&q=" + encodeURIComponent(query)));
       } catch (e) {
         const tr = document.createElement("tr");
-        tr.innerHTML = "<td colspan='11' class='bad'>" + String(e.message) + "</td>";
+        tr.innerHTML = "<td colspan='10' class='bad'>" + String(e.message) + "</td>";
         body.appendChild(tr);
         return;
       }
