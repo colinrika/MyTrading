@@ -821,6 +821,7 @@ app.get("/dashboard.html", pageAuthRequired, (req, res) => res.sendFile(path.joi
 app.get("/account.html", pageAuthRequired, (req, res) => res.sendFile(path.join(__dirname, "account.html")));
 app.get("/connect-kraken.html", pageAuthRequired, (req, res) => res.sendFile(path.join(__dirname, "connect-kraken.html")));
 app.get("/strategy.html", pageAuthRequired, (req, res) => res.sendFile(path.join(__dirname, "strategy.html")));
+app.get("/reports.html", pageAuthRequired, (req, res) => res.sendFile(path.join(__dirname, "reports.html")));
 
 /* Public pages */
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "login.html")));
@@ -834,6 +835,7 @@ app.get("/dashboard", pageAuthRequired, (req, res) => res.redirect("/dashboard.h
 app.get("/account", pageAuthRequired, (req, res) => res.redirect("/account.html"));
 app.get("/connect", pageAuthRequired, (req, res) => res.redirect("/connect.html"));
 app.get("/strategy", pageAuthRequired, (req, res) => res.redirect("/strategy.html"));
+app.get("/reports", pageAuthRequired, (req, res) => res.redirect("/reports.html"));
 
 /* Static assets after protected routes */
 app.use(express.static(__dirname));
@@ -1000,6 +1002,43 @@ app.get("/api/orders/open", authRequired, async (req, res) => {
     res.json({ ok: true, orders });
   } catch (e) {
     res.status(500).json({ error: "Failed to load open orders", details: String(e.message || e) });
+  }
+});
+
+app.get("/api/reports/sold", authRequired, async (req, res) => {
+  try {
+    const page = Math.max(1, Number(req.query.page || 1));
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit || req.query.pageSize || 10)));
+    const offset = (page - 1) * limit;
+
+    const uid = Number(req.user.uid);
+
+    const countRes = await pool.query(
+      `select count(*)::bigint as c from public.trades_history where user_id = $1`,
+      [uid]
+    );
+    const total = Number(countRes.rows?.[0]?.c || 0);
+
+    const listRes = await pool.query(
+      `
+      select
+        pair,
+        buy_time_ms as "buyTime",
+        sell_time_ms as "sellTime",
+        amount_bought_usd as "amountBoughtUsd",
+        profit_usd as "profitUsd",
+        loss_usd as "lossUsd"
+      from public.trades_history
+      where user_id = $1
+      order by sell_time_ms desc
+      limit $2 offset $3
+      `,
+      [uid, limit, offset]
+    );
+
+    res.json({ page, limit, total, items: listRes.rows || [] });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to load reports", details: String(e.message || e) });
   }
 });
 
