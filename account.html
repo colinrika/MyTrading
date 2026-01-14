@@ -468,6 +468,7 @@
         const volume = Number(t.volume);
         const tpPrice = Number(t.takeProfit ?? t.tp);
         const slPrice = Number(t.stopLoss ?? t.sl);
+        const exitSlTxid = String(t.exitSlTxid || "");
 
         const entryUsd = Number.isFinite(entryPrice) && Number.isFinite(volume) ? entryPrice * volume : null;
         const tpUsd = Number.isFinite(tpPrice) && Number.isFinite(volume) ? tpPrice * volume : null;
@@ -491,6 +492,16 @@
             currentUsdClass = "bgBad";
           } else {
             currentUsdClass = "bgEqual";
+          }
+        }
+
+        if (!isSubmitted && Number.isFinite(currentPrice) && Number.isFinite(slPrice) && currentPrice <= slPrice && !exitSlTxid) {
+          if (!window.__autoStopLoss) window.__autoStopLoss = new Set();
+          if (!window.__autoStopLoss.has(t.id)) {
+            window.__autoStopLoss.add(t.id);
+            postJson(apiUrl("/api/order/stop-loss"), { tradeId: Number(t.id) })
+              .then(() => refreshTrades())
+              .catch(() => {});
           }
         }
 

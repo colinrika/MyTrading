@@ -173,6 +173,15 @@ async function initDb() {
   `);
 
   await dbRun(`
+    CREATE TABLE IF NOT EXISTS public.trades_filled (
+      trade_id BIGINT PRIMARY KEY REFERENCES public.trades(id) ON DELETE CASCADE,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      pair TEXT NOT NULL,
+      filled_time_ms BIGINT NOT NULL
+    );
+  `);
+
+  await dbRun(`
     CREATE INDEX IF NOT EXISTS trades_user_time_idx ON public.trades (user_id, time_ms DESC);
   `);
 }
@@ -548,6 +557,33 @@ async function logTrade(entry) {
 
   const r = await pool.query(q, vals);
   return { ...item, id: r.rows?.[0]?.id ?? null };
+}
+
+async function recordFilledTrade(trade) {
+  if (!trade?.id || !trade?.user_id || !trade?.pair) return;
+  const filledTime = Date.now();
+  await dbRun(
+    `
+    INSERT INTO public.trades_filled (trade_id, user_id, pair, filled_time_ms)
+    VALUES ($1,$2,$3,$4)
+    ON CONFLICT (trade_id) DO NOTHING
+    `,
+    [trade.id, trade.user_id, trade.pair, filledTime]
+  );
+}
+
+async function fetchLastPrice(pair) {
+  try {
+    const url = "https://api.kraken.com/0/public/Ticker?pair=" + encodeURIComponent(pair);
+    const r = await fetch(url);
+    const j = await r.json();
+    const result = j.result || {};
+    const k = Object.keys(result)[0];
+    const last = k ? Number(result[k]?.c?.[0]) : null;
+    return Number.isFinite(last) ? last : null;
+  } catch {
+    return null;
+  }
 }
 
 async function recordTradeHistory(trade, soldPrice) {
@@ -1036,7 +1072,16 @@ app.get("/api/reports/sold", authRequired, async (req, res) => {
       [uid, limit, offset]
     );
 
-    res.json({ page, limit, total, items: listRes.rows || [] });
+    const items = (listRes.rows || []).map((row) => ({
+      ...row,
+      buyTime: Number(row.buyTime),
+      sellTime: Number(row.sellTime),
+      amountBoughtUsd: row.amountBoughtUsd !== null ? Number(row.amountBoughtUsd) : null,
+      profitUsd: row.profitUsd !== null ? Number(row.profitUsd) : null,
+      lossUsd: row.lossUsd !== null ? Number(row.lossUsd) : null
+    }));
+
+    res.json({ page, limit, total, items });
   } catch (e) {
     res.status(500).json({ error: "Failed to load reports", details: String(e.message || e) });
   }
@@ -1054,6 +1099,57 @@ app.post("/api/order/cancel", authRequired, async (req, res) => {
     res.json({ ok: true, canceled: true, txid });
   } catch (e) {
     res.status(500).json({ error: "Cancel failed", details: String(e.message || e) });
+  }
+});
+
+app.post("/api/order/stop-loss", authRequired, async (req, res) => {
+  try {
+    const tradeId = Number(req.body?.tradeId);
+    if (!tradeId) return res.status(400).json({ error: "Missing tradeId" });
+
+    const trade = await dbGet(
+      `select * from public.trades where id = $1 and user_id = $2`,
+      [tradeId, req.user.uid]
+    );
+    if (!trade) return res.status(404).json({ error: "Trade not found" });
+
+    if (String(trade.status || "").toLowerCase() !== "filled") {
+      return res.status(400).json({ error: "Trade is not filled yet" });
+    }
+
+    if (trade.exit_sl_txid) {
+      return res.json({ ok: true, alreadyExists: true, txid: trade.exit_sl_txid });
+    }
+
+    const client = await getUserKrakenClient(req.user.uid);
+    if (!client) return res.status(400).json({ error: "No Kraken keys saved" });
+
+    const meta = await getPairMeta(client, trade.pair);
+    const entryPrice = Number(trade.entry_price);
+    const movePct = targetMovePct();
+    let stopLoss = numOrNull(trade.stop_loss) ?? clampPrice(meta, entryPrice * (1 - movePct));
+    stopLoss = capStopLossForBuy(meta, entryPrice, stopLoss);
+
+    const slLimit = clampPrice(meta, stopLoss * 0.995);
+    const volumeStr = String(trade.volume);
+
+    const slParams = {
+      pair: trade.pair,
+      type: "sell",
+      ordertype: "stop-loss-limit",
+      price: String(stopLoss),
+      price2: slLimit ? String(slLimit) : String(stopLoss),
+      volume: volumeStr
+    };
+
+    const slResp = await krakenApiWithNonceRetry(client, req.user.uid, "AddOrder", slParams);
+    const slTxid = Array.isArray(slResp?.result?.txid) ? slResp.result.txid[0] : "";
+    if (!slTxid) return res.status(500).json({ error: "Stop loss placement failed" });
+
+    await updateTrade(tradeId, { exit_sl_txid: slTxid, exit_status: "open" });
+    res.json({ ok: true, txid: slTxid });
+  } catch (e) {
+    res.status(500).json({ error: "Stop loss failed", details: String(e.message || e) });
   }
 });
 
@@ -1157,6 +1253,7 @@ app.get("/trades", authRequired, async (req, res) => {
         entry_price as "entryPrice",
         take_profit as "takeProfit",
         stop_loss as "stopLoss",
+        exit_sl_txid as "exitSlTxid",
         est_profit_usd as "estProfitUsd",
         est_loss_usd as "estLossUsd",
         message,
@@ -1412,7 +1509,8 @@ app.post("/api/order/close", authRequired, async (req, res) => {
       [tradeId, msg, volumeToSell]
     );
 
-    await recordTradeHistory(trade, trade.entry_price);
+    const lastPrice = await fetchLastPrice(trade.pair);
+    await recordTradeHistory(trade, lastPrice ?? trade.entry_price);
 
     res.json({ ok: true, closed: true, txid, volumeSold: volumeToSell });
   } catch (e) {
