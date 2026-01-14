@@ -159,6 +159,20 @@ async function initDb() {
   `);
 
   await dbRun(`
+    CREATE TABLE IF NOT EXISTS public.trades_history (
+      id BIGSERIAL PRIMARY KEY,
+      trade_id BIGINT UNIQUE NOT NULL REFERENCES public.trades(id) ON DELETE CASCADE,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      pair TEXT NOT NULL,
+      buy_time_ms BIGINT NOT NULL,
+      sell_time_ms BIGINT NOT NULL,
+      amount_bought_usd NUMERIC,
+      profit_usd NUMERIC,
+      loss_usd NUMERIC
+    );
+  `);
+
+  await dbRun(`
     CREATE INDEX IF NOT EXISTS trades_user_time_idx ON public.trades (user_id, time_ms DESC);
   `);
 }
@@ -534,6 +548,40 @@ async function logTrade(entry) {
 
   const r = await pool.query(q, vals);
   return { ...item, id: r.rows?.[0]?.id ?? null };
+}
+
+async function recordTradeHistory(trade, soldPrice) {
+  const entryPrice = Number(trade?.entry_price);
+  const volume = Number(trade?.volume);
+  const buyTime = Number(trade?.time_ms);
+  const sellTime = Date.now();
+  if (!Number.isFinite(entryPrice) || !Number.isFinite(volume) || !Number.isFinite(buyTime)) return;
+
+  const entryUsd = entryPrice * volume;
+  const sellPx = Number.isFinite(soldPrice) ? soldPrice : entryPrice;
+  const soldUsd = sellPx * volume;
+  const profitUsd = soldUsd > entryUsd ? (soldUsd - entryUsd) : 0;
+  const lossUsd = soldUsd < entryUsd ? (entryUsd - soldUsd) : 0;
+
+  await dbRun(
+    `
+    INSERT INTO public.trades_history
+      (trade_id, user_id, pair, buy_time_ms, sell_time_ms, amount_bought_usd, profit_usd, loss_usd)
+    VALUES
+      ($1,$2,$3,$4,$5,$6,$7,$8)
+    ON CONFLICT (trade_id) DO NOTHING
+    `,
+    [
+      trade.id,
+      trade.user_id,
+      trade.pair,
+      buyTime,
+      sellTime,
+      entryUsd,
+      profitUsd > 0 ? profitUsd : null,
+      lossUsd > 0 ? lossUsd : null
+    ]
+  );
 }
 
 function readSafeTradesFile() {
@@ -1325,6 +1373,8 @@ app.post("/api/order/close", authRequired, async (req, res) => {
       [tradeId, msg, volumeToSell]
     );
 
+    await recordTradeHistory(trade, trade.entry_price);
+
     res.json({ ok: true, closed: true, txid, volumeSold: volumeToSell });
   } catch (e) {
     res.status(500).json({ error: "Force close failed", details: String(e.message || e) });
@@ -1664,12 +1714,14 @@ async function watchExitsOnce() {
     if (tpClosed) {
       await cancelOrder(client, uid, slTxid);
       await updateTrade(t.id, { exit_status: "tp_filled", status: "closed", message: "Take profit filled. Stop loss canceled." });
+      await recordTradeHistory(t, t.take_profit);
       continue;
     }
 
     if (slClosed) {
       await cancelOrder(client, uid, tpTxid);
       await updateTrade(t.id, { exit_status: "sl_filled", status: "closed", message: "Stop loss filled. Take profit canceled." });
+      await recordTradeHistory(t, t.stop_loss);
       continue;
     }
   }

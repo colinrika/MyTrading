@@ -471,6 +471,16 @@
         const estLossClass = Number.isFinite(estLoss) && estLoss > 0 ? "bad" : "muted";
 
         const currentUsd = Number.isFinite(currentPrice) && Number.isFinite(volume) ? currentPrice * volume : null;
+        let currentUsdClass = priceClass;
+        if (Number.isFinite(currentUsd) && Number.isFinite(entryUsd)) {
+          if (currentUsd > entryUsd) {
+            currentUsdClass = "good";
+          } else if (currentUsd < entryUsd) {
+            currentUsdClass = "bad";
+          } else {
+            currentUsdClass = "priceHighlight";
+          }
+        }
 
         tr.innerHTML =
           "<td>" + (t.time ? new Date(t.time).toLocaleString() : (t.createdAt ? new Date(t.createdAt).toLocaleString() : "")) + "</td>" +
@@ -481,7 +491,7 @@
           "<td>" + fmt(t.volume, 6) + "</td>" +
           "<td>" + fmtUsd(tpUsd) + "</td>" +
           "<td>" + fmtUsd(slUsd) + "</td>" +
-          "<td class='" + priceClass + "'>" + fmtUsd(currentUsd) + "</td>" +
+          "<td class='" + currentUsdClass + "'>" + fmtUsd(currentUsd) + "</td>" +
           "<td><span class='" + estProfitClass + "'>" + fmtUsd(estProfit) + "</span>/" +
           "<span class='" + estLossClass + "'>" + fmtUsd(estLoss) + "</span></td>" +
           "<td></td>" +
