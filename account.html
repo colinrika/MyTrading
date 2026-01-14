@@ -455,10 +455,10 @@
           actionWrap.appendChild(closeBtn);
         }
 
-        const openOrdersBtn = document.createElement("button");
-        openOrdersBtn.className = "linkBtnSmall";
-        openOrdersBtn.textContent = "View";
-        openOrdersBtn.addEventListener("click", (e) => {
+        const openOrdersButton = document.createElement("button");
+        openOrdersButton.className = "linkBtnSmall";
+        openOrdersButton.textContent = "View";
+        openOrdersButton.addEventListener("click", (e) => {
           e.stopPropagation();
           loadOpenOrders(pair, t.id);
         });
@@ -493,40 +493,6 @@
           }
         }
 
-        const openOrdersBtn = document.createElement("button");
-        openOrdersBtn.className = "linkBtnSmall";
-        openOrdersBtn.textContent = "View";
-        openOrdersBtn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          loadOpenOrders(pair, t.id);
-        });
-
-        const entryPrice = Number(t.entryPrice ?? t.entry);
-        const volume = Number(t.volume);
-        const tpPrice = Number(t.takeProfit ?? t.tp);
-        const slPrice = Number(t.stopLoss ?? t.sl);
-
-        const entryUsd = Number.isFinite(entryPrice) && Number.isFinite(volume) ? entryPrice * volume : null;
-        const tpUsd = Number.isFinite(tpPrice) && Number.isFinite(volume) ? tpPrice * volume : null;
-        const slUsd = Number.isFinite(slPrice) && Number.isFinite(volume) ? slPrice * volume : null;
-
-        const estProfit = (Number.isFinite(tpUsd) && Number.isFinite(entryUsd)) ? tpUsd - entryUsd : null;
-        const estLoss = (Number.isFinite(slUsd) && Number.isFinite(entryUsd)) ? entryUsd - slUsd : null;
-        const estProfitClass = Number.isFinite(estProfit) && estProfit > 0 ? "good" : "muted";
-        const estLossClass = Number.isFinite(estLoss) && estLoss > 0 ? "bad" : "muted";
-
-        const currentUsd = Number.isFinite(currentPrice) && Number.isFinite(volume) ? currentPrice * volume : null;
-        let currentUsdClass = priceClass;
-        if (Number.isFinite(currentUsd) && Number.isFinite(entryUsd)) {
-          if (currentUsd > entryUsd) {
-            currentUsdClass = "good";
-          } else if (currentUsd < entryUsd) {
-            currentUsdClass = "bad";
-          } else {
-            currentUsdClass = "priceHighlight";
-          }
-        }
-
         tr.innerHTML =
           "<td>" + (t.time ? new Date(t.time).toLocaleString() : (t.createdAt ? new Date(t.createdAt).toLocaleString() : "")) + "</td>" +
           "<td>" + pair + "</td>" +
@@ -543,7 +509,7 @@
           "<td></td>";
 
         tr.setAttribute("data-trade-id", String(t.id || ""));
-        tr.children[10].appendChild(openOrdersBtn);
+        tr.children[10].appendChild(openOrdersButton);
         tr.children[11].appendChild(actionWrap);
 
         body.appendChild(tr);
