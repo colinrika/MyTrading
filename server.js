@@ -21,7 +21,7 @@ dotenv.config();
 const app = express();
 
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
 app.use(cookieParser());
 
 function nowMs() { return Date.now(); }
@@ -61,6 +61,13 @@ const KRAKEN_FEE_PCT = Number(process.env.KRAKEN_FEE_PCT || 0.0026);
 function targetMovePct() {
   const feePct = Number.isFinite(KRAKEN_FEE_PCT) ? KRAKEN_FEE_PCT : 0;
   return QUICK_PROFIT_PCT + Math.max(0, feePct);
+}
+
+function makeRequestCode() {
+  const letters = "abcdefghijklmnopqrstuvwxyz";
+  const block = Array.from({ length: 3 }, () => letters[Math.floor(Math.random() * letters.length)]).join("");
+  const digits = String(Math.floor(Math.random() * 1000)).padStart(3, "0");
+  return `${block}-${digits}`;
 }
 
 async function dbRun(sql, params = []) {
@@ -178,6 +185,26 @@ async function initDb() {
       user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       pair TEXT NOT NULL,
       filled_time_ms BIGINT NOT NULL
+    );
+  `);
+
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS public.loan_requests (
+      id BIGSERIAL PRIMARY KEY,
+      created_at BIGINT NOT NULL,
+      request_code TEXT,
+      amount NUMERIC NOT NULL,
+      start_date TEXT NOT NULL,
+      weeks INT NOT NULL,
+      payments JSONB NOT NULL,
+      schedule JSONB NOT NULL,
+      is_existing_user BOOLEAN NOT NULL,
+      existing_phone TEXT,
+      first_name TEXT,
+      last_name TEXT,
+      email TEXT,
+      zelle_phone TEXT,
+      documents JSONB
     );
   `);
 
@@ -867,6 +894,7 @@ app.get("/verify", (req, res) => res.redirect("/verify.html"));
 app.get("/login.html", (req, res) => res.sendFile(path.join(__dirname, "login.html")));
 app.get("/register.html", (req, res) => res.sendFile(path.join(__dirname, "register.html")));
 app.get("/verify.html", (req, res) => res.sendFile(path.join(__dirname, "verify.html")));
+app.get("/loan", (req, res) => res.sendFile(path.join(__dirname, "loan.html")));
 app.get("/dashboard", pageAuthRequired, (req, res) => res.redirect("/dashboard.html"));
 app.get("/account", pageAuthRequired, (req, res) => res.redirect("/account.html"));
 app.get("/connect", pageAuthRequired, (req, res) => res.redirect("/connect.html"));
@@ -971,6 +999,89 @@ app.post("/api/login", async (req, res) => {
 app.post("/api/logout", (req, res) => {
   res.clearCookie("session");
   res.json({ ok: true });
+});
+
+app.post("/api/loan-requests", async (req, res) => {
+  try {
+    const amount = Number(req.body?.amount);
+    const startDate = String(req.body?.startDate || "").trim();
+    const weeks = Number(req.body?.weeks);
+    const payments = req.body?.payments ?? [];
+    const schedule = req.body?.schedule ?? [];
+    const userType = String(req.body?.userType || "").trim();
+    const existingPhone = String(req.body?.existingPhone || "").trim();
+    const firstName = String(req.body?.firstName || "").trim();
+    const lastName = String(req.body?.lastName || "").trim();
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const zellePhone = String(req.body?.zellePhone || "").trim();
+    const documents = Array.isArray(req.body?.documents) ? req.body.documents : [];
+
+    if (!(amount > 0)) return res.status(400).json({ error: "Invalid loan amount" });
+    if (!startDate) return res.status(400).json({ error: "Missing start date" });
+    if (!Number.isInteger(weeks) || weeks < 1) return res.status(400).json({ error: "Invalid weeks" });
+    if (!Array.isArray(payments) || !Array.isArray(schedule)) {
+      return res.status(400).json({ error: "Missing schedule details" });
+    }
+
+    const isExistingUser = userType === "existing";
+    if (isExistingUser && !existingPhone) {
+      return res.status(400).json({ error: "Missing existing user phone number" });
+    }
+    if (!isExistingUser && (!firstName || !lastName || !email || !zellePhone)) {
+      return res.status(400).json({ error: "Missing new user details" });
+    }
+
+    if (isExistingUser) {
+      const existingUser = await dbGet(`SELECT id FROM users WHERE phone = $1`, [existingPhone]);
+      if (!existingUser) {
+        return res.status(404).json({ error: "Phone number not found for existing user" });
+      }
+    }
+
+    const requestCode = isExistingUser ? null : makeRequestCode();
+
+    const insert = `
+      INSERT INTO public.loan_requests (
+        created_at,
+        request_code,
+        amount,
+        start_date,
+        weeks,
+        payments,
+        schedule,
+        is_existing_user,
+        existing_phone,
+        first_name,
+        last_name,
+        email,
+        zelle_phone,
+        documents
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+      RETURNING id
+    `;
+
+    const result = await pool.query(insert, [
+      nowMs(),
+      requestCode,
+      amount,
+      startDate,
+      weeks,
+      JSON.stringify(payments),
+      JSON.stringify(schedule),
+      isExistingUser,
+      existingPhone || null,
+      firstName || null,
+      lastName || null,
+      email || null,
+      zellePhone || null,
+      JSON.stringify(documents)
+    ]);
+
+    return res.json({ ok: true, id: result.rows[0].id, requestCode });
+  } catch (err) {
+    return res.status(500).json({ error: "Loan request failed", details: err.message });
+  }
 });
 
 /* Kraken keys */
