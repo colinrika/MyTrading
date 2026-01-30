@@ -33,13 +33,20 @@
     .btnPrimary { background: #1b4fe0; border: none; color: #fff; border-radius: 8px; }
 
     .modalOverlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: none; align-items: center; justify-content: center; padding: 16px; }
-    .modal { background: #fff; border-radius: 12px; max-width: 520px; width: 100%; padding: 18px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+    .modal { background: #fff; border-radius: 12px; max-width: 560px; width: 100%; padding: 18px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
     .modalHeader { display: flex; justify-content: space-between; align-items: center; }
     .modalTitle { font-size: 18px; font-weight: 800; }
     .modalClose { border: none; background: transparent; font-size: 20px; cursor: pointer; }
-    .modalRow { margin-top: 12px; }
+    .modalBody { margin-top: 12px; }
+    .modalPanel { border: 1px solid #e6e6e6; border-radius: 10px; padding: 14px; background: #fafafa; display: flex; flex-direction: column; gap: 12px; max-height: 70vh; overflow-y: auto; }
+    .modalRow { display: flex; flex-direction: column; gap: 6px; }
     .modalRow input[type="text"], .modalRow input[type="email"], .modalRow input[type="tel"] { width: 100%; }
-    .radioRow { display: flex; gap: 16px; margin-top: 10px; }
+    .radioRow { display: flex; gap: 16px; }
+    .fieldGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .fieldGrid .modalRow { margin: 0; }
+    @media (max-width: 600px) {
+      .fieldGrid { grid-template-columns: 1fr; }
+    }
     .hidden { display: none; }
   </style>
 </head>
@@ -116,47 +123,55 @@
       <button class="modalClose" id="modalCloseBtn" aria-label="Close">×</button>
     </div>
 
-    <div class="muted">Choose how you want to identify yourself.</div>
-
-    <div class="radioRow">
-      <label><input type="radio" name="userType" value="existing" checked /> Existing user</label>
-      <label><input type="radio" name="userType" value="new" /> New request</label>
-    </div>
-
     <form id="requestForm">
-      <div id="existingFields" class="modalRow">
-        <label>Phone number</label>
-        <input id="existingPhone" type="tel" placeholder="Phone number on your account" />
-      </div>
+      <div class="modalBody">
+        <div class="modalPanel">
+          <div class="muted">Choose how you want to identify yourself.</div>
 
-      <div id="newFields" class="hidden">
-        <div class="modalRow">
-          <label>First name</label>
-          <input id="firstName" type="text" placeholder="First name" />
-        </div>
-        <div class="modalRow">
-          <label>Last name</label>
-          <input id="lastName" type="text" placeholder="Last name" />
-        </div>
-        <div class="modalRow">
-          <label>Email</label>
-          <input id="email" type="email" placeholder="Email address" />
-        </div>
-        <div class="modalRow">
-          <label>Phone number to Zelle</label>
-          <input id="zellePhone" type="tel" placeholder="Zelle phone number" />
-        </div>
-      </div>
+          <div class="radioRow">
+            <label><input type="radio" name="userType" value="existing" checked /> Existing user</label>
+            <label><input type="radio" name="userType" value="new" /> New request</label>
+          </div>
 
-      <div class="modalRow">
-        <label>Upload pay slip or supporting documents (optional)</label>
-        <input id="documents" type="file" multiple />
-      </div>
+          <div id="existingFields" class="modalRow">
+            <label>Phone number</label>
+            <input id="existingPhone" type="tel" placeholder="Phone number on your account" />
+          </div>
 
-      <div id="requestMsg" class="muted" style="margin-top:10px;"></div>
+          <div id="newFields" class="hidden">
+            <div class="fieldGrid">
+              <div class="modalRow">
+                <label>First name</label>
+                <input id="firstName" type="text" placeholder="First name" />
+              </div>
+              <div class="modalRow">
+                <label>Last name</label>
+                <input id="lastName" type="text" placeholder="Last name" />
+              </div>
+            </div>
+            <div class="fieldGrid">
+              <div class="modalRow">
+                <label>Email</label>
+                <input id="email" type="email" placeholder="Email address" />
+              </div>
+              <div class="modalRow">
+                <label>Phone number to Zelle</label>
+                <input id="zellePhone" type="tel" placeholder="Zelle phone number" />
+              </div>
+            </div>
+          </div>
 
-      <div class="actions" style="margin-top:16px;">
-        <button type="submit" class="btnPrimary">Submit Request</button>
+          <div class="modalRow">
+            <label>Upload pay slip or supporting documents (optional)</label>
+            <input id="documents" type="file" multiple />
+          </div>
+
+          <div id="requestMsg" class="muted"></div>
+
+          <div class="actions">
+            <button type="submit" class="btnPrimary">Submit Request</button>
+          </div>
+        </div>
       </div>
     </form>
   </div>
