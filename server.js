@@ -867,6 +867,7 @@ app.get("/verify", (req, res) => res.redirect("/verify.html"));
 app.get("/login.html", (req, res) => res.sendFile(path.join(__dirname, "login.html")));
 app.get("/register.html", (req, res) => res.sendFile(path.join(__dirname, "register.html")));
 app.get("/verify.html", (req, res) => res.sendFile(path.join(__dirname, "verify.html")));
+app.get("/loan", (req, res) => res.sendFile(path.join(__dirname, "loan.html")));
 app.get("/dashboard", pageAuthRequired, (req, res) => res.redirect("/dashboard.html"));
 app.get("/account", pageAuthRequired, (req, res) => res.redirect("/account.html"));
 app.get("/connect", pageAuthRequired, (req, res) => res.redirect("/connect.html"));
