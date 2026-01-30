@@ -63,6 +63,13 @@ function targetMovePct() {
   return QUICK_PROFIT_PCT + Math.max(0, feePct);
 }
 
+function makeRequestCode() {
+  const letters = "abcdefghijklmnopqrstuvwxyz";
+  const block = Array.from({ length: 3 }, () => letters[Math.floor(Math.random() * letters.length)]).join("");
+  const digits = String(Math.floor(Math.random() * 1000)).padStart(3, "0");
+  return `${block}-${digits}`;
+}
+
 async function dbRun(sql, params = []) {
   return pool.query(sql, params);
 }
@@ -185,6 +192,7 @@ async function initDb() {
     CREATE TABLE IF NOT EXISTS public.loan_requests (
       id BIGSERIAL PRIMARY KEY,
       created_at BIGINT NOT NULL,
+      request_code TEXT,
       amount NUMERIC NOT NULL,
       start_date TEXT NOT NULL,
       weeks INT NOT NULL,
@@ -1023,9 +1031,19 @@ app.post("/api/loan-requests", async (req, res) => {
       return res.status(400).json({ error: "Missing new user details" });
     }
 
+    if (isExistingUser) {
+      const existingUser = await dbGet(`SELECT id FROM users WHERE phone = $1`, [existingPhone]);
+      if (!existingUser) {
+        return res.status(404).json({ error: "Phone number not found for existing user" });
+      }
+    }
+
+    const requestCode = isExistingUser ? null : makeRequestCode();
+
     const insert = `
       INSERT INTO public.loan_requests (
         created_at,
+        request_code,
         amount,
         start_date,
         weeks,
@@ -1039,12 +1057,13 @@ app.post("/api/loan-requests", async (req, res) => {
         zelle_phone,
         documents
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
       RETURNING id
     `;
 
     const result = await pool.query(insert, [
       nowMs(),
+      requestCode,
       amount,
       startDate,
       weeks,
@@ -1059,7 +1078,7 @@ app.post("/api/loan-requests", async (req, res) => {
       JSON.stringify(documents)
     ]);
 
-    return res.json({ ok: true, id: result.rows[0].id });
+    return res.json({ ok: true, id: result.rows[0].id, requestCode });
   } catch (err) {
     return res.status(500).json({ error: "Loan request failed", details: err.message });
   }

@@ -538,7 +538,11 @@
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || "Request failed");
-      requestMsg.textContent = "Request submitted. Reference #" + data.id;
+      if (data.requestCode) {
+        requestMsg.textContent = "Request submitted. Save your request code: " + data.requestCode + ". You will need it for follow-up.";
+      } else {
+        requestMsg.textContent = "Request submitted. Reference #" + data.id;
+      }
       requestMsg.style.color = "#0b6b0b";
       requestForm.reset();
       setRequestMode("existing");
