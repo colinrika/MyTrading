@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Loan Plan Schedule</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; line-height: 1.35; }
+    .wrap { max-width: 1200px; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+    label { display: block; font-weight: 700; margin-bottom: 6px; }
+    input, button { padding: 10px; font-size: 14px; }
+    input { min-width: 220px; }
+    button { cursor: pointer; }
+    .muted { color: #666; font-size: 13px; }
+    .error { color: #b00020; font-weight: 700; margin-top: 10px; }
+    .ok { color: #0b6b0b; font-weight: 700; margin-top: 10px; }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border: 1px solid #e2e2e2; padding: 8px; text-align: right; vertical-align: middle; }
+    th { background: #fafafa; }
+    td:first-child, th:first-child { text-align: left; }
+    td:nth-child(2), th:nth-child(2) { text-align: left; }
+
+    .sectionTitle { font-size: 16px; font-weight: 800; margin: 10px 0 6px; }
+    .payInput { width: 160px; min-width: 160px; }
+    .readonly { background: #f4f4f4; }
+    .btnSmall { padding: 8px 10px; font-size: 13px; }
+    .btnDanger { border: 1px solid #cfcfcf; background: #fff; }
+    .btnDanger:disabled { opacity: 0.5; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="card">
+    <div class="sectionTitle">Plan setup</div>
+    <div class="muted">
+      Interest is 10 percent of the unpaid balance at the start of each week.
+      Unpaid interest rolls into the next week.
+      The final week is auto adjusted to close the balance to 0.00.
+      Rows can be deleted except the last row.
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <div>
+        <label>Amount to borrow</label>
+        <input id="amount" type="number" min="0" step="0.01" inputmode="decimal"/>
+      </div>
+      <div>
+        <label>Date to receive</label>
+        <input id="startDate" type="date"/>
+      </div>
+      <div>
+        <label>Weeks</label>
+        <input id="weeks" type="number" min="1" step="1" value="1" inputmode="numeric"/>
+      </div>
+      <div>
+        <button id="buildBtn">Build schedule</button>
+      </div>
+    </div>
+
+    <div id="msgErr" class="error" style="display:none;"></div>
+    <div id="msgOk" class="ok" style="display:none;"></div>
+
+    <div id="tableWrap" style="display:none;">
+      <div class="sectionTitle">Plan schedule</div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Week</th>
+            <th>Due date</th>
+            <th>Starting balance</th>
+            <th>Interest</th>
+            <th>Total due</th>
+            <th>Intended payment</th>
+            <th>Ending balance</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+
+      <div class="muted" style="margin-top:10px;">
+        Intended payment is editable for all weeks except the last week.
+        Calculations update when you leave the field.
+        Delete is disabled for the last row.
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const RATE = 0.10;
+
+  const amountEl = document.getElementById("amount");
+  const startDateEl = document.getElementById("startDate");
+  const weeksEl = document.getElementById("weeks");
+  const buildBtn = document.getElementById("buildBtn");
+
+  const msgErr = document.getElementById("msgErr");
+  const msgOk = document.getElementById("msgOk");
+  const tableWrap = document.getElementById("tableWrap");
+  const tbody = document.getElementById("tbody");
+
+  let state = {
+    amount: 0,
+    startDate: null,
+    weeks: 1,
+    payments: []
+  };
+
+  function money(n) {
+    const x = Number.isFinite(n) ? n : 0;
+    return x.toLocaleString(undefined, { style: "currency", currency: "USD" });
+  }
+
+  function parseDate(v) {
+    if (!v) return null;
+    const d = new Date(v + "T00:00:00");
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  function addDays(d, days) {
+    const x = new Date(d.getTime());
+    x.setDate(x.getDate() + days);
+    return x;
+  }
+
+  function formatDate(d) {
+    return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "2-digit" });
+  }
+
+  function showError(text) {
+    msgErr.textContent = text;
+    msgErr.style.display = "block";
+    msgOk.style.display = "none";
+  }
+
+  function showOk(text) {
+    msgOk.textContent = text;
+    msgOk.style.display = "block";
+    msgErr.style.display = "none";
+  }
+
+  function clearMsgs() {
+    msgErr.textContent = "";
+    msgErr.style.display = "none";
+    msgOk.textContent = "";
+    msgOk.style.display = "none";
+  }
+
+  function clampNonNegative(n) {
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  }
+
+  function ensurePaymentsLength() {
+    const w = state.weeks;
+    const prev = Array.isArray(state.payments) ? state.payments : [];
+    const next = new Array(w).fill(0);
+    for (let i = 0; i < Math.min(prev.length, w); i++) next[i] = clampNonNegative(Number(prev[i]));
+    state.payments = next;
+  }
+
+  function computeSchedule() {
+    let balance = state.amount;
+    const rows = [];
+
+    for (let w = 1; w <= state.weeks; w++) {
+      const starting = balance;
+      const interest = starting * RATE;
+      const totalDue = starting + interest;
+
+      let payment = clampNonNegative(Number(state.payments[w - 1]));
+      if (w === state.weeks) payment = totalDue;
+
+      const ending = Math.max(0, totalDue - payment);
+
+      rows.push({
+        week: w,
+        dueDate: addDays(state.startDate, 7 * w),
+        starting,
+        interest,
+        totalDue,
+        payment,
+        ending
+      });
+
+      balance = ending;
+    }
+
+    return rows;
+  }
+
+  function filterNumericString(s) {
+    const raw = String(s ?? "");
+    let out = "";
+    let dotUsed = false;
+    for (const ch of raw) {
+      if (ch >= "0" && ch <= "9") out += ch;
+      else if (ch === "." && !dotUsed) { out += "."; dotUsed = true; }
+    }
+    return out;
+  }
+
+  function rebuildTable() {
+    tbody.innerHTML = "";
+    ensurePaymentsLength();
+
+    const rows = computeSchedule();
+
+    rows.forEach(r => {
+      const isLast = r.week === state.weeks;
+      const tr = document.createElement("tr");
+
+      tr.innerHTML = `
+        <td>${r.week}</td>
+        <td>${formatDate(r.dueDate)}</td>
+        <td>${money(r.starting)}</td>
+        <td>${money(r.interest)}</td>
+        <td>${money(r.totalDue)}</td>
+        <td>
+          <input
+            class="payInput ${isLast ? "readonly" : ""}"
+            type="text"
+            inputmode="decimal"
+            autocomplete="off"
+            spellcheck="false"
+            data-week="${r.week}"
+            ${isLast ? "readonly" : ""}
+            value="${Number(r.payment).toFixed(2)}"
+          />
+        </td>
+        <td>${money(r.ending)}</td>
+        <td>
+          <button
+            class="btnSmall btnDanger"
+            data-del-week="${r.week}"
+            ${isLast ? "disabled" : ""}
+            title="${isLast ? "Last row cannot be removed" : "Remove this week"}"
+          >
+            Delete
+          </button>
+        </td>
+      `;
+
+      tbody.appendChild(tr);
+    });
+
+    tbody.querySelectorAll("input[data-week]").forEach(inp => {
+      inp.addEventListener("input", e => {
+        const t = e.target;
+        const filtered = filterNumericString(t.value);
+        if (t.value !== filtered) t.value = filtered;
+      });
+
+      inp.addEventListener("blur", e => {
+        const w = Number(e.target.dataset.week);
+        if (!Number.isInteger(w)) return;
+        if (w === state.weeks) return;
+
+        const filtered = filterNumericString(e.target.value);
+        const v = clampNonNegative(Number(filtered));
+        state.payments[w - 1] = v;
+
+        rebuildTable();
+        showOk("Plan updated. Final payment is auto adjusted to close the balance.");
+      });
+    });
+
+    tbody.querySelectorAll("button[data-del-week]").forEach(btn => {
+      btn.addEventListener("click", e => {
+        const w = Number(e.target.getAttribute("data-del-week"));
+        if (!Number.isInteger(w)) return;
+
+        if (state.weeks <= 1) return;
+        if (w === state.weeks) return;
+
+        state.payments.splice(w - 1, 1);
+        state.weeks = Math.max(1, state.weeks - 1);
+        weeksEl.value = String(state.weeks);
+
+        ensurePaymentsLength();
+        rebuildTable();
+        showOk("Week removed. The last row is protected and cannot be deleted.");
+      });
+    });
+
+    tableWrap.style.display = "block";
+
+    if (state.weeks === 1) {
+      showOk("One week plan created. Payment equals total due at day 7.");
+    } else {
+      showOk("Plan built. Final payment is auto adjusted to close the balance.");
+    }
+  }
+
+  function build() {
+    clearMsgs();
+
+    const amount = Number(amountEl.value);
+    const startDate = parseDate(startDateEl.value);
+    const weeks = Number(weeksEl.value);
+
+    if (!(amount > 0)) return showError("Enter a valid amount to borrow.");
+    if (!startDate) return showError("Enter the date to receive the loan.");
+    if (!Number.isInteger(weeks) || weeks < 1) return showError("Weeks must be 1 or more.");
+
+    state.amount = amount;
+    state.startDate = startDate;
+    state.weeks = weeks;
+
+    state.payments = new Array(weeks).fill(0);
+
+    rebuildTable();
+  }
+
+  buildBtn.addEventListener("click", build);
+
+  weeksEl.addEventListener("change", () => {
+    const w = Number(weeksEl.value);
+    if (!Number.isInteger(w) || w < 1) return;
+
+    state.weeks = w;
+    ensurePaymentsLength();
+
+    if (state.amount > 0 && state.startDate) {
+      rebuildTable();
+    }
+  });
+</script>
+</body>
+</html>
