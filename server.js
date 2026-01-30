@@ -207,6 +207,10 @@ async function initDb() {
       documents JSONB
     );
   `);
+  await dbRun(`
+    ALTER TABLE public.loan_requests
+    ADD COLUMN IF NOT EXISTS request_code TEXT;
+  `);
 
   await dbRun(`
     CREATE INDEX IF NOT EXISTS trades_user_time_idx ON public.trades (user_id, time_ms DESC);
