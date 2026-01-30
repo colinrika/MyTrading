@@ -29,6 +29,18 @@
     .btnSmall { padding: 8px 10px; font-size: 13px; }
     .btnDanger { border: 1px solid #cfcfcf; background: #fff; }
     .btnDanger:disabled { opacity: 0.5; cursor: not-allowed; }
+    .actions { display: flex; justify-content: flex-end; margin-top: 14px; }
+    .btnPrimary { background: #1b4fe0; border: none; color: #fff; border-radius: 8px; }
+
+    .modalOverlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: none; align-items: center; justify-content: center; padding: 16px; }
+    .modal { background: #fff; border-radius: 12px; max-width: 520px; width: 100%; padding: 18px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+    .modalHeader { display: flex; justify-content: space-between; align-items: center; }
+    .modalTitle { font-size: 18px; font-weight: 800; }
+    .modalClose { border: none; background: transparent; font-size: 20px; cursor: pointer; }
+    .modalRow { margin-top: 12px; }
+    .modalRow input[type="text"], .modalRow input[type="email"], .modalRow input[type="tel"] { width: 100%; }
+    .radioRow { display: flex; gap: 16px; margin-top: 10px; }
+    .hidden { display: none; }
   </style>
 </head>
 <body>
@@ -88,9 +100,66 @@
         Calculations update when you leave the field.
         Delete is disabled for the last row.
       </div>
+
+      <div class="actions">
+        <button id="requestBtn" class="btnPrimary">Request Loan</button>
+      </div>
     </div>
   </div>
 
+</div>
+
+<div id="requestModal" class="modalOverlay" role="dialog" aria-modal="true" aria-labelledby="requestTitle">
+  <div class="modal">
+    <div class="modalHeader">
+      <div id="requestTitle" class="modalTitle">Loan Request Details</div>
+      <button class="modalClose" id="modalCloseBtn" aria-label="Close">×</button>
+    </div>
+
+    <div class="muted">Choose how you want to identify yourself.</div>
+
+    <div class="radioRow">
+      <label><input type="radio" name="userType" value="existing" checked /> Existing user</label>
+      <label><input type="radio" name="userType" value="new" /> New request</label>
+    </div>
+
+    <form id="requestForm">
+      <div id="existingFields" class="modalRow">
+        <label>Phone number</label>
+        <input id="existingPhone" type="tel" placeholder="Phone number on your account" />
+      </div>
+
+      <div id="newFields" class="hidden">
+        <div class="modalRow">
+          <label>First name</label>
+          <input id="firstName" type="text" placeholder="First name" />
+        </div>
+        <div class="modalRow">
+          <label>Last name</label>
+          <input id="lastName" type="text" placeholder="Last name" />
+        </div>
+        <div class="modalRow">
+          <label>Email</label>
+          <input id="email" type="email" placeholder="Email address" />
+        </div>
+        <div class="modalRow">
+          <label>Phone number to Zelle</label>
+          <input id="zellePhone" type="tel" placeholder="Zelle phone number" />
+        </div>
+      </div>
+
+      <div class="modalRow">
+        <label>Upload pay slip or supporting documents (optional)</label>
+        <input id="documents" type="file" multiple />
+      </div>
+
+      <div id="requestMsg" class="muted" style="margin-top:10px;"></div>
+
+      <div class="actions" style="margin-top:16px;">
+        <button type="submit" class="btnPrimary">Submit Request</button>
+      </div>
+    </form>
+  </div>
 </div>
 
 <script>
@@ -105,12 +174,21 @@
   const msgOk = document.getElementById("msgOk");
   const tableWrap = document.getElementById("tableWrap");
   const tbody = document.getElementById("tbody");
+  const requestBtn = document.getElementById("requestBtn");
+
+  const requestModal = document.getElementById("requestModal");
+  const modalCloseBtn = document.getElementById("modalCloseBtn");
+  const requestForm = document.getElementById("requestForm");
+  const existingFields = document.getElementById("existingFields");
+  const newFields = document.getElementById("newFields");
+  const requestMsg = document.getElementById("requestMsg");
 
   let state = {
     amount: 0,
     startDate: null,
     weeks: 1,
-    payments: []
+    payments: [],
+    schedule: []
   };
 
   function money(n) {
@@ -211,6 +289,7 @@
     ensurePaymentsLength();
 
     const rows = computeSchedule();
+    state.schedule = rows;
 
     rows.forEach(r => {
       const isLast = r.week === state.weeks;
@@ -329,6 +408,128 @@
 
     if (state.amount > 0 && state.startDate) {
       rebuildTable();
+    }
+  });
+
+  function setRequestMode(mode) {
+    if (mode === "existing") {
+      existingFields.classList.remove("hidden");
+      newFields.classList.add("hidden");
+    } else {
+      existingFields.classList.add("hidden");
+      newFields.classList.remove("hidden");
+    }
+    requestMsg.textContent = "";
+    requestMsg.style.color = "#666";
+  }
+
+  function openModal() {
+    requestModal.style.display = "flex";
+    requestMsg.style.color = "#666";
+  }
+
+  function closeModal() {
+    requestModal.style.display = "none";
+    requestMsg.textContent = "";
+    requestMsg.style.color = "#666";
+  }
+
+  document.querySelectorAll("input[name=\"userType\"]").forEach(radio => {
+    radio.addEventListener("change", e => setRequestMode(e.target.value));
+  });
+
+  modalCloseBtn.addEventListener("click", closeModal);
+  requestModal.addEventListener("click", e => {
+    if (e.target === requestModal) closeModal();
+  });
+
+  requestBtn.addEventListener("click", () => {
+    if (!state.amount || !state.startDate || !state.schedule.length) {
+      showError("Build a plan before submitting a loan request.");
+      return;
+    }
+    openModal();
+  });
+
+  requestForm.addEventListener("submit", async e => {
+    e.preventDefault();
+    requestMsg.textContent = "";
+
+    const userType = document.querySelector("input[name=\"userType\"]:checked").value;
+    const existingPhone = document.getElementById("existingPhone").value.trim();
+    const firstName = document.getElementById("firstName").value.trim();
+    const lastName = document.getElementById("lastName").value.trim();
+    const email = document.getElementById("email").value.trim();
+    const zellePhone = document.getElementById("zellePhone").value.trim();
+    const documents = document.getElementById("documents").files;
+
+    if (userType === "existing" && !existingPhone) {
+      requestMsg.textContent = "Please enter the phone number on your account.";
+      return;
+    }
+    if (userType === "new" && (!firstName || !lastName || !email || !zellePhone)) {
+      requestMsg.textContent = "Please complete all new request fields.";
+      return;
+    }
+
+    const MAX_FILES = 5;
+    const MAX_FILE_SIZE = 2 * 1024 * 1024;
+    const files = Array.from(documents);
+    if (files.length > MAX_FILES) {
+      requestMsg.textContent = `Please upload up to ${MAX_FILES} documents.`;
+      return;
+    }
+    for (const file of files) {
+      if (file.size > MAX_FILE_SIZE) {
+        requestMsg.textContent = "Each document must be 2MB or smaller.";
+        return;
+      }
+    }
+
+    const filePayloads = await Promise.all(files.map(file => (
+      new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve({
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          data: String(reader.result || "")
+        });
+        reader.onerror = () => reject(new Error("Failed to read file"));
+        reader.readAsDataURL(file);
+      })
+    )));
+
+    const payload = {
+      amount: state.amount,
+      startDate: state.startDate.toISOString(),
+      weeks: state.weeks,
+      payments: state.payments,
+      schedule: state.schedule,
+      userType,
+      existingPhone,
+      firstName,
+      lastName,
+      email,
+      zellePhone,
+      documents: filePayloads
+    };
+
+    try {
+      const r = await fetch("/api/loan-requests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || "Request failed");
+      requestMsg.textContent = "Request submitted. Reference #" + data.id;
+      requestMsg.style.color = "#0b6b0b";
+      requestForm.reset();
+      setRequestMode("existing");
+    } catch (err) {
+      requestMsg.textContent = err.message;
+      requestMsg.style.color = "#b00020";
     }
   });
 </script>
