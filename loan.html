@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Loan Plan Schedule</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; line-height: 1.35; }
+    .wrap { max-width: 1200px; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+    label { display: block; font-weight: 700; margin-bottom: 6px; }
+    input, button { padding: 10px; font-size: 14px; }
+    input { min-width: 220px; }
+    button { cursor: pointer; }
+    .muted { color: #666; font-size: 13px; }
+    .error { color: #b00020; font-weight: 700; margin-top: 10px; }
+    .ok { color: #0b6b0b; font-weight: 700; margin-top: 10px; }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border: 1px solid #e2e2e2; padding: 8px; text-align: right; vertical-align: middle; }
+    th { background: #fafafa; }
+    td:first-child, th:first-child { text-align: left; }
+    td:nth-child(2), th:nth-child(2) { text-align: left; }
+
+    .sectionTitle { font-size: 16px; font-weight: 800; margin: 10px 0 6px; }
+    .payInput { width: 160px; min-width: 160px; }
+    .readonly { background: #f4f4f4; }
+    .btnSmall { padding: 8px 10px; font-size: 13px; }
+    .btnDanger { border: 1px solid #cfcfcf; background: #fff; }
+    .btnDanger:disabled { opacity: 0.5; cursor: not-allowed; }
+    .actions { display: flex; justify-content: flex-end; margin-top: 14px; }
+    .btnPrimary { background: #1b4fe0; border: none; color: #fff; border-radius: 8px; }
+
+    .modalOverlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: none; align-items: center; justify-content: center; padding: 16px; }
+    .modal { background: #fff; border-radius: 12px; max-width: 560px; width: 100%; padding: 18px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+    .modalHeader { display: flex; justify-content: space-between; align-items: center; }
+    .modalTitle { font-size: 18px; font-weight: 800; }
+    .modalClose { border: none; background: transparent; font-size: 20px; cursor: pointer; }
+    .modalBody { margin-top: 12px; }
+    .modalPanel { border: 1px solid #e6e6e6; border-radius: 10px; padding: 14px; background: #fafafa; display: flex; flex-direction: column; gap: 12px; max-height: 70vh; overflow-y: auto; }
+    .modalRow { display: flex; flex-direction: column; gap: 6px; }
+    .modalRow input[type="text"], .modalRow input[type="email"], .modalRow input[type="tel"] { width: 100%; }
+    .radioRow { display: flex; gap: 16px; }
+    .fieldGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .fieldGrid .modalRow { margin: 0; }
+    @media (max-width: 600px) {
+      .fieldGrid { grid-template-columns: 1fr; }
+    }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="card">
+    <div class="sectionTitle">Plan setup</div>
+    <div class="muted">
+      Interest is 10 percent of the unpaid balance at the start of each week.
+      Unpaid interest rolls into the next week.
+      The final week is auto adjusted to close the balance to 0.00.
+      Rows can be deleted except the last row.
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <div>
+        <label>Amount to borrow</label>
+        <input id="amount" type="number" min="0" step="0.01" inputmode="decimal"/>
+      </div>
+      <div>
+        <label>Date to receive</label>
+        <input id="startDate" type="date"/>
+      </div>
+      <div>
+        <label>Weeks</label>
+        <input id="weeks" type="number" min="1" step="1" value="1" inputmode="numeric"/>
+      </div>
+      <div>
+        <button id="buildBtn">Build schedule</button>
+      </div>
+    </div>
+
+    <div id="msgErr" class="error" style="display:none;"></div>
+    <div id="msgOk" class="ok" style="display:none;"></div>
+
+    <div id="tableWrap" style="display:none;">
+      <div class="sectionTitle">Plan schedule</div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Week</th>
+            <th>Due date</th>
+            <th>Starting balance</th>
+            <th>Interest</th>
+            <th>Total due</th>
+            <th>Intended payment</th>
+            <th>Ending balance</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+
+      <div class="muted" style="margin-top:10px;">
+        Intended payment is editable for all weeks except the last week.
+        Calculations update when you leave the field.
+        Delete is disabled for the last row.
+      </div>
+
+      <div class="actions">
+        <button id="requestBtn" class="btnPrimary">Request Loan</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div id="requestModal" class="modalOverlay" role="dialog" aria-modal="true" aria-labelledby="requestTitle">
+  <div class="modal">
+    <div class="modalHeader">
+      <div id="requestTitle" class="modalTitle">Loan Request Details</div>
+      <button class="modalClose" id="modalCloseBtn" aria-label="Close">×</button>
+    </div>
+
+    <form id="requestForm">
+      <div class="modalBody">
+        <div class="modalPanel">
+          <div class="muted">Choose how you want to identify yourself.</div>
+
+          <div class="radioRow">
+            <label><input type="radio" name="userType" value="existing" checked /> Existing user</label>
+            <label><input type="radio" name="userType" value="new" /> New request</label>
+          </div>
+
+          <div id="existingFields" class="modalRow">
+            <label>Phone number</label>
+            <input id="existingPhone" type="tel" placeholder="Phone number on your account" />
+          </div>
+
+          <div id="newFields" class="hidden">
+            <div class="fieldGrid">
+              <div class="modalRow">
+                <label>First name</label>
+                <input id="firstName" type="text" placeholder="First name" />
+              </div>
+              <div class="modalRow">
+                <label>Last name</label>
+                <input id="lastName" type="text" placeholder="Last name" />
+              </div>
+            </div>
+            <div class="fieldGrid">
+              <div class="modalRow">
+                <label>Email</label>
+                <input id="email" type="email" placeholder="Email address" />
+              </div>
+              <div class="modalRow">
+                <label>Phone number to Zelle</label>
+                <input id="zellePhone" type="tel" placeholder="Zelle phone number" />
+              </div>
+            </div>
+          </div>
+
+          <div class="modalRow">
+            <label>Upload pay slip or supporting documents (optional)</label>
+            <input id="documents" type="file" multiple />
+          </div>
+
+          <div id="requestMsg" class="muted"></div>
+
+          <div class="actions">
+            <button type="submit" class="btnPrimary">Submit Request</button>
+          </div>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  const RATE = 0.10;
+
+  const amountEl = document.getElementById("amount");
+  const startDateEl = document.getElementById("startDate");
+  const weeksEl = document.getElementById("weeks");
+  const buildBtn = document.getElementById("buildBtn");
+
+  const msgErr = document.getElementById("msgErr");
+  const msgOk = document.getElementById("msgOk");
+  const tableWrap = document.getElementById("tableWrap");
+  const tbody = document.getElementById("tbody");
+  const requestBtn = document.getElementById("requestBtn");
+
+  const requestModal = document.getElementById("requestModal");
+  const modalCloseBtn = document.getElementById("modalCloseBtn");
+  const requestForm = document.getElementById("requestForm");
+  const existingFields = document.getElementById("existingFields");
+  const newFields = document.getElementById("newFields");
+  const requestMsg = document.getElementById("requestMsg");
+
+  let state = {
+    amount: 0,
+    startDate: null,
+    weeks: 1,
+    payments: [],
+    schedule: []
+  };
+
+  function money(n) {
+    const x = Number.isFinite(n) ? n : 0;
+    return x.toLocaleString(undefined, { style: "currency", currency: "USD" });
+  }
+
+  function parseDate(v) {
+    if (!v) return null;
+    const d = new Date(v + "T00:00:00");
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  function addDays(d, days) {
+    const x = new Date(d.getTime());
+    x.setDate(x.getDate() + days);
+    return x;
+  }
+
+  function formatDate(d) {
+    return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "2-digit" });
+  }
+
+  function showError(text) {
+    msgErr.textContent = text;
+    msgErr.style.display = "block";
+    msgOk.style.display = "none";
+  }
+
+  function showOk(text) {
+    msgOk.textContent = text;
+    msgOk.style.display = "block";
+    msgErr.style.display = "none";
+  }
+
+  function clearMsgs() {
+    msgErr.textContent = "";
+    msgErr.style.display = "none";
+    msgOk.textContent = "";
+    msgOk.style.display = "none";
+  }
+
+  function clampNonNegative(n) {
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  }
+
+  function ensurePaymentsLength() {
+    const w = state.weeks;
+    const prev = Array.isArray(state.payments) ? state.payments : [];
+    const next = new Array(w).fill(0);
+    for (let i = 0; i < Math.min(prev.length, w); i++) next[i] = clampNonNegative(Number(prev[i]));
+    state.payments = next;
+  }
+
+  function computeSchedule() {
+    let balance = state.amount;
+    const rows = [];
+
+    for (let w = 1; w <= state.weeks; w++) {
+      const starting = balance;
+      const interest = starting * RATE;
+      const totalDue = starting + interest;
+
+      let payment = clampNonNegative(Number(state.payments[w - 1]));
+      if (w === state.weeks) payment = totalDue;
+
+      const ending = Math.max(0, totalDue - payment);
+
+      rows.push({
+        week: w,
+        dueDate: addDays(state.startDate, 7 * w),
+        starting,
+        interest,
+        totalDue,
+        payment,
+        ending
+      });
+
+      balance = ending;
+    }
+
+    return rows;
+  }
+
+  function filterNumericString(s) {
+    const raw = String(s ?? "");
+    let out = "";
+    let dotUsed = false;
+    for (const ch of raw) {
+      if (ch >= "0" && ch <= "9") out += ch;
+      else if (ch === "." && !dotUsed) { out += "."; dotUsed = true; }
+    }
+    return out;
+  }
+
+  function rebuildTable() {
+    tbody.innerHTML = "";
+    ensurePaymentsLength();
+
+    const rows = computeSchedule();
+    state.schedule = rows;
+
+    rows.forEach(r => {
+      const isLast = r.week === state.weeks;
+      const tr = document.createElement("tr");
+
+      tr.innerHTML = `
+        <td>${r.week}</td>
+        <td>${formatDate(r.dueDate)}</td>
+        <td>${money(r.starting)}</td>
+        <td>${money(r.interest)}</td>
+        <td>${money(r.totalDue)}</td>
+        <td>
+          <input
+            class="payInput ${isLast ? "readonly" : ""}"
+            type="text"
+            inputmode="decimal"
+            autocomplete="off"
+            spellcheck="false"
+            data-week="${r.week}"
+            ${isLast ? "readonly" : ""}
+            value="${Number(r.payment).toFixed(2)}"
+          />
+        </td>
+        <td>${money(r.ending)}</td>
+        <td>
+          <button
+            class="btnSmall btnDanger"
+            data-del-week="${r.week}"
+            ${isLast ? "disabled" : ""}
+            title="${isLast ? "Last row cannot be removed" : "Remove this week"}"
+          >
+            Delete
+          </button>
+        </td>
+      `;
+
+      tbody.appendChild(tr);
+    });
+
+    tbody.querySelectorAll("input[data-week]").forEach(inp => {
+      inp.addEventListener("input", e => {
+        const t = e.target;
+        const filtered = filterNumericString(t.value);
+        if (t.value !== filtered) t.value = filtered;
+      });
+
+      inp.addEventListener("blur", e => {
+        const w = Number(e.target.dataset.week);
+        if (!Number.isInteger(w)) return;
+        if (w === state.weeks) return;
+
+        const filtered = filterNumericString(e.target.value);
+        const v = clampNonNegative(Number(filtered));
+        state.payments[w - 1] = v;
+
+        rebuildTable();
+        showOk("Plan updated. Final payment is auto adjusted to close the balance.");
+      });
+    });
+
+    tbody.querySelectorAll("button[data-del-week]").forEach(btn => {
+      btn.addEventListener("click", e => {
+        const w = Number(e.target.getAttribute("data-del-week"));
+        if (!Number.isInteger(w)) return;
+
+        if (state.weeks <= 1) return;
+        if (w === state.weeks) return;
+
+        state.payments.splice(w - 1, 1);
+        state.weeks = Math.max(1, state.weeks - 1);
+        weeksEl.value = String(state.weeks);
+
+        ensurePaymentsLength();
+        rebuildTable();
+        showOk("Week removed. The last row is protected and cannot be deleted.");
+      });
+    });
+
+    tableWrap.style.display = "block";
+
+    if (state.weeks === 1) {
+      showOk("One week plan created. Payment equals total due at day 7.");
+    } else {
+      showOk("Plan built. Final payment is auto adjusted to close the balance.");
+    }
+  }
+
+  function build() {
+    clearMsgs();
+
+    const amount = Number(amountEl.value);
+    const startDate = parseDate(startDateEl.value);
+    const weeks = Number(weeksEl.value);
+
+    if (!(amount > 0)) return showError("Enter a valid amount to borrow.");
+    if (!startDate) return showError("Enter the date to receive the loan.");
+    if (!Number.isInteger(weeks) || weeks < 1) return showError("Weeks must be 1 or more.");
+
+    state.amount = amount;
+    state.startDate = startDate;
+    state.weeks = weeks;
+
+    state.payments = new Array(weeks).fill(0);
+
+    rebuildTable();
+  }
+
+  buildBtn.addEventListener("click", build);
+
+  weeksEl.addEventListener("change", () => {
+    const w = Number(weeksEl.value);
+    if (!Number.isInteger(w) || w < 1) return;
+
+    state.weeks = w;
+    ensurePaymentsLength();
+
+    if (state.amount > 0 && state.startDate) {
+      rebuildTable();
+    }
+  });
+
+  function setRequestMode(mode) {
+    if (mode === "existing") {
+      existingFields.classList.remove("hidden");
+      newFields.classList.add("hidden");
+    } else {
+      existingFields.classList.add("hidden");
+      newFields.classList.remove("hidden");
+    }
+    requestMsg.textContent = "";
+    requestMsg.style.color = "#666";
+  }
+
+  function openModal() {
+    requestModal.style.display = "flex";
+    requestMsg.style.color = "#666";
+  }
+
+  function closeModal() {
+    requestModal.style.display = "none";
+    requestMsg.textContent = "";
+    requestMsg.style.color = "#666";
+  }
+
+  document.querySelectorAll("input[name=\"userType\"]").forEach(radio => {
+    radio.addEventListener("change", e => setRequestMode(e.target.value));
+  });
+
+  modalCloseBtn.addEventListener("click", closeModal);
+  requestModal.addEventListener("click", e => {
+    if (e.target === requestModal) closeModal();
+  });
+
+  requestBtn.addEventListener("click", () => {
+    if (!state.amount || !state.startDate || !state.schedule.length) {
+      showError("Build a plan before submitting a loan request.");
+      return;
+    }
+    openModal();
+  });
+
+  requestForm.addEventListener("submit", async e => {
+    e.preventDefault();
+    requestMsg.textContent = "";
+
+    const userType = document.querySelector("input[name=\"userType\"]:checked").value;
+    const existingPhone = document.getElementById("existingPhone").value.trim();
+    const firstName = document.getElementById("firstName").value.trim();
+    const lastName = document.getElementById("lastName").value.trim();
+    const email = document.getElementById("email").value.trim();
+    const zellePhone = document.getElementById("zellePhone").value.trim();
+    const documents = document.getElementById("documents").files;
+
+    if (userType === "existing" && !existingPhone) {
+      requestMsg.textContent = "Please enter the phone number on your account.";
+      return;
+    }
+    if (userType === "new" && (!firstName || !lastName || !email || !zellePhone)) {
+      requestMsg.textContent = "Please complete all new request fields.";
+      return;
+    }
+
+    const MAX_FILES = 5;
+    const MAX_FILE_SIZE = 2 * 1024 * 1024;
+    const files = Array.from(documents);
+    if (files.length > MAX_FILES) {
+      requestMsg.textContent = `Please upload up to ${MAX_FILES} documents.`;
+      return;
+    }
+    for (const file of files) {
+      if (file.size > MAX_FILE_SIZE) {
+        requestMsg.textContent = "Each document must be 2MB or smaller.";
+        return;
+      }
+    }
+
+    const filePayloads = await Promise.all(files.map(file => (
+      new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve({
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          data: String(reader.result || "")
+        });
+        reader.onerror = () => reject(new Error("Failed to read file"));
+        reader.readAsDataURL(file);
+      })
+    )));
+
+    const payload = {
+      amount: state.amount,
+      startDate: state.startDate.toISOString(),
+      weeks: state.weeks,
+      payments: state.payments,
+      schedule: state.schedule,
+      userType,
+      existingPhone,
+      firstName,
+      lastName,
+      email,
+      zellePhone,
+      documents: filePayloads
+    };
+
+    try {
+      const r = await fetch("/api/loan-requests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || "Request failed");
+      requestMsg.textContent = "Request submitted. Reference #" + data.id;
+      requestMsg.style.color = "#0b6b0b";
+      requestForm.reset();
+      setRequestMode("existing");
+    } catch (err) {
+      requestMsg.textContent = err.message;
+      requestMsg.style.color = "#b00020";
+    }
+  });
+</script>
+</body>
+</html>
