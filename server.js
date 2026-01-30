@@ -1035,11 +1035,15 @@ app.post("/api/loan-requests", async (req, res) => {
       return res.status(400).json({ error: "Missing new user details" });
     }
 
+    let requesterName = "";
     if (isExistingUser) {
-      const existingUser = await dbGet(`SELECT id FROM users WHERE phone = $1`, [existingPhone]);
+      const existingUser = await dbGet(`SELECT id, name FROM users WHERE phone = $1`, [existingPhone]);
       if (!existingUser) {
         return res.status(404).json({ error: "Phone number not found for existing user" });
       }
+      requesterName = String(existingUser.name || "").trim();
+    } else {
+      requesterName = `${firstName} ${lastName}`.trim();
     }
 
     const requestCode = isExistingUser ? null : makeRequestCode();
@@ -1082,7 +1086,19 @@ app.post("/api/loan-requests", async (req, res) => {
       JSON.stringify(documents)
     ]);
 
-    return res.json({ ok: true, id: result.rows[0].id, requestCode });
+    const loanId = result.rows[0].id;
+    if (telegramConfigured()) {
+      const amountText = Number(amount).toFixed(2);
+      const who = requesterName || "A customer";
+      const msg = `${who} have request a $${amountText} loan. Do you wish to approve.`;
+      try {
+        await sendTelegram(msg);
+      } catch (err) {
+        console.warn("Telegram send failed", err.message || err);
+      }
+    }
+
+    return res.json({ ok: true, id: loanId, requestCode });
   } catch (err) {
     return res.status(500).json({ error: "Loan request failed", details: err.message });
   }
