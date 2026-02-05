@@ -469,6 +469,8 @@
   requestForm.addEventListener("submit", async e => {
     e.preventDefault();
     requestMsg.textContent = "";
+    requestMsg.style.color = "#666";
+    requestMsg.textContent = "Submitting request...";
 
     const userType = document.querySelector("input[name=\"userType\"]:checked").value;
     const existingPhone = document.getElementById("existingPhone").value.trim();
@@ -541,11 +543,14 @@
       if (data.requestCode) {
         requestMsg.textContent = "Request submitted. Save your request code: " + data.requestCode + ". You will need it for follow-up.";
       } else {
-        requestMsg.textContent = "Request submitted. Reference #" + data.id;
+      requestMsg.textContent = "Request submitted. Reference #" + data.id;
       }
       requestMsg.style.color = "#0b6b0b";
       requestForm.reset();
       setRequestMode("existing");
+      setTimeout(() => {
+        closeModal();
+      }, 2000);
     } catch (err) {
       requestMsg.textContent = err.message;
       requestMsg.style.color = "#b00020";
