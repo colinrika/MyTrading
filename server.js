@@ -1090,7 +1090,16 @@ app.post("/api/loan-requests", async (req, res) => {
     if (telegramConfigured()) {
       const amountText = Number(amount).toFixed(2);
       const who = requesterName || "A customer";
-      const msg = `${who} have request a $${amountText} loan. Do you wish to approve.`;
+      const scheduleLines = Array.isArray(schedule)
+        ? schedule.map(row => {
+          const week = row?.week ?? "";
+          const due = row?.dueDate ?? "";
+          const payment = Number(row?.payment ?? 0).toFixed(2);
+          return `Week ${week}: $${payment} due ${due}`;
+        })
+        : [];
+      const details = scheduleLines.length ? `\n\nPlanned payments:\n${scheduleLines.join("\n")}` : "";
+      const msg = `${who} have request a $${amountText} loan. Do you wish to approve.${details}`;
       try {
         await sendTelegram(msg);
       } catch (err) {
