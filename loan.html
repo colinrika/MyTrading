@@ -44,6 +44,9 @@
     .radioRow { display: flex; gap: 16px; }
     .fieldGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
     .fieldGrid .modalRow { margin: 0; }
+    .agreementBox { border: 1px solid #d9d9d9; border-radius: 8px; background: #fff; padding: 10px; font-size: 13px; color: #444; line-height: 1.4; }
+    .consentRow { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: #333; }
+    .consentRow input { margin-top: 2px; min-width: auto; }
     @media (max-width: 600px) {
       .fieldGrid { grid-template-columns: 1fr; }
     }
@@ -166,6 +169,17 @@
             <input id="documents" type="file" multiple />
           </div>
 
+          <div class="agreementBox">
+            <strong>Loan Agreement Notice</strong><br/>
+            By submitting this request, you digitally agree that if this loan is approved and funds are transferred,
+            you are responsible for paying according to the planned payment schedule you submitted.
+          </div>
+
+          <label class="consentRow">
+            <input id="loanConsent" type="checkbox" />
+            <span>I understand and digitally agree to the loan repayment terms above if my loan is approved and disbursed.</span>
+          </label>
+
           <div id="requestMsg" class="muted"></div>
 
           <div class="actions">
@@ -197,6 +211,7 @@
   const existingFields = document.getElementById("existingFields");
   const newFields = document.getElementById("newFields");
   const requestMsg = document.getElementById("requestMsg");
+  const loanConsent = document.getElementById("loanConsent");
 
   let state = {
     amount: 0,
@@ -486,6 +501,10 @@
     }
     if (userType === "new" && (!firstName || !lastName || !email || !zellePhone)) {
       requestMsg.textContent = "Please complete all new request fields.";
+      return;
+    }
+    if (!loanConsent.checked) {
+      requestMsg.textContent = "Please confirm the loan agreement before submitting.";
       return;
     }
 
